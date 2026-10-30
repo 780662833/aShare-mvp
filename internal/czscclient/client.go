@@ -76,6 +76,11 @@ type ZSSummary struct {
 	ZZ        float64 `json:"zz"`
 }
 
+type SignalLifecycle struct {
+	AgeBars   int    `json:"age_bars"`
+	StartedAt string `json:"started_at"`
+}
+
 type AnalyzeResponse struct {
 	SchemaVersion        string            `json:"schema_version"`
 	TsCode               string            `json:"ts_code"`
@@ -87,6 +92,7 @@ type AnalyzeResponse struct {
 	CZSCSourceRevision   string            `json:"czsc_source_revision"`
 	SignalDataStatus     string            `json:"signal_data_status"`
 	Signals              map[string]string `json:"signals"`
+	SignalLifecycles     map[string]SignalLifecycle `json:"signal_lifecycles,omitempty"`
 	AsOf                 string            `json:"as_of"`
 	InputBarCount        int               `json:"input_bar_count"`
 	FXCount              int               `json:"fx_count"`
@@ -319,6 +325,26 @@ func validateAnalyzeResponse(request AnalyzeRequest, result AnalyzeResponse) err
 	}
 	if result.Signals == nil {
 		result.Signals = map[string]string{}
+	}
+	for key, lifecycle := range result.SignalLifecycles {
+		if _, exists := result.Signals[key]; !exists {
+			return fmt.Errorf("CZSC signal_lifecycles 包含未返回的信号 key: %q", key)
+		}
+		if lifecycle.AgeBars < 0 {
+			return fmt.Errorf("CZSC 信号 %q 的 age_bars 不能为负数", key)
+		}
+		startedAt, err := time.Parse(time.RFC3339Nano, lifecycle.StartedAt)
+		if err != nil {
+			return fmt.Errorf("CZSC 信号 %q 的 started_at 无效: %w", key, err)
+		}
+		_, offset := startedAt.Zone()
+		asOf, err := time.Parse(time.RFC3339Nano, result.AsOf)
+		if err != nil {
+			return fmt.Errorf("CZSC as_of 无效: %w", err)
+		}
+		if offset != marketdata.ShanghaiOffsetSeconds || startedAt.After(asOf) {
+			return fmt.Errorf("CZSC 信号 %q 的 started_at 必须为不晚于 as_of 的 +08:00 时间", key)
+		}
 	}
 	return nil
 }
