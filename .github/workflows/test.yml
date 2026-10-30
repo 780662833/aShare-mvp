@@ -18,15 +18,16 @@ jobs:
         with:
           go-version: "1.27.x"
           cache: true
-      # The initial repository did not contain go.sum. Resolve and write the
-      # module checksums before executing the test suite.
-      - run: go mod tidy
+      # The initial repository did not contain go.sum. Let Go resolve the
+      # dependency graph and write checksums while compiling the full test tree.
+      - run: go test -mod=mod ./...
       - uses: actions/upload-artifact@v4
         with:
           name: go-module-lock
           path: go.sum
           if-no-files-found: error
           retention-days: 1
+      # Verify the generated lock file is sufficient for a normal readonly test.
       - run: go test ./...
 
   czsc-contract:
