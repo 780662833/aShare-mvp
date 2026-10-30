@@ -152,12 +152,22 @@ func (s *Store) UpsertStockBasics(ctx context.Context, items []universe.StockBas
 		market, exchange, curr_type, list_status, list_date, delist_date, is_hs, updated_at
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(ts_code) DO UPDATE SET
-		symbol=excluded.symbol, name=excluded.name, area=excluded.area,
-		industry=excluded.industry, fullname=excluded.fullname, enname=excluded.enname,
-		cnspell=excluded.cnspell, market=excluded.market, exchange=excluded.exchange,
-		curr_type=excluded.curr_type, list_status=excluded.list_status,
-		list_date=excluded.list_date, delist_date=excluded.delist_date,
-		is_hs=excluded.is_hs, updated_at=excluded.updated_at`
+		symbol=CASE WHEN excluded.symbol='' THEN stock_basic.symbol ELSE excluded.symbol END,
+		name=CASE WHEN excluded.name='' THEN stock_basic.name ELSE excluded.name END,
+		area=CASE WHEN excluded.area='' THEN stock_basic.area ELSE excluded.area END,
+		industry=CASE WHEN excluded.industry='' THEN stock_basic.industry ELSE excluded.industry END,
+		fullname=CASE WHEN excluded.fullname='' THEN stock_basic.fullname ELSE excluded.fullname END,
+		enname=CASE WHEN excluded.enname='' THEN stock_basic.enname ELSE excluded.enname END,
+		cnspell=CASE WHEN excluded.cnspell='' THEN stock_basic.cnspell ELSE excluded.cnspell END,
+		market=CASE WHEN excluded.market='' THEN stock_basic.market ELSE excluded.market END,
+		exchange=excluded.exchange,
+		curr_type=CASE WHEN excluded.curr_type='' THEN stock_basic.curr_type ELSE excluded.curr_type END,
+		list_status=CASE WHEN excluded.list_status='UNKNOWN' AND stock_basic.list_status<>'UNKNOWN'
+			THEN stock_basic.list_status ELSE excluded.list_status END,
+		list_date=CASE WHEN excluded.list_date='' THEN stock_basic.list_date ELSE excluded.list_date END,
+		delist_date=CASE WHEN excluded.delist_date='' THEN stock_basic.delist_date ELSE excluded.delist_date END,
+		is_hs=CASE WHEN excluded.is_hs='' THEN stock_basic.is_hs ELSE excluded.is_hs END,
+		updated_at=excluded.updated_at`
 	for _, item := range items {
 		_, err = tx.ExecContext(ctx, stmt,
 			item.TsCode, item.Symbol, item.Name, item.Area, item.Industry, item.Fullname,
@@ -223,6 +233,19 @@ func (s *Store) UpsertTradeCalendar(ctx context.Context, items []calendar.TradeD
 		is_open=excluded.is_open, pretrade_date=excluded.pretrade_date,
 		source=excluded.source, source_url=excluded.source_url, fetched_at=excluded.fetched_at`
 	for _, item := range items {
+		var currentSource string
+		err := tx.QueryRowContext(ctx,
+			"SELECT source FROM trade_calendar WHERE exchange = ? AND cal_date = ?",
+			string(item.Exchange), item.CalDate,
+		).Scan(&currentSource)
+		if err != nil && err != sql.ErrNoRows {
+			_ = tx.Rollback()
+			return fmt.Errorf("读取现有交易日历来源失败: %w", err)
+		}
+		if err == nil && !calendar.IsAuthoritative(item.Source, calendar.Source(currentSource)) {
+			continue
+		}
+
 		isOpen := 0
 		if item.IsOpen {
 			isOpen = 1
@@ -255,12 +278,28 @@ func (s *Store) UpsertBars(ctx context.Context, bars []marketdata.Bar) error {
 		volume=excluded.volume, amount=excluded.amount, volume_unit=excluded.volume_unit,
 		source=excluded.source, is_complete=excluded.is_complete, fetched_at=excluded.fetched_at`
 	for _, bar := range bars {
+		barTime := bar.BarTime.Format(time.RFC3339Nano)
+		var currentSource string
+		err := tx.QueryRowContext(ctx, `SELECT source FROM stock_kline
+			WHERE ts_code = ? AND freq = ? AND adjust_mode = ? AND bar_time = ?`,
+			bar.TsCode, string(bar.Frequency), string(bar.AdjustMode), barTime,
+		).Scan(&currentSource)
+		if err != nil && err != sql.ErrNoRows {
+			_ = tx.Rollback()
+			return fmt.Errorf("读取现有 K 线来源失败: %w", err)
+		}
+		if err == nil && currentSource != bar.Source {
+			_ = tx.Rollback()
+			return fmt.Errorf("拒绝跨数据源覆盖 K 线 %s %s %s：已有来源 %q，新来源 %q；需先单独核对重叠区间",
+				bar.TsCode, bar.Frequency, barTime, currentSource, bar.Source)
+		}
+
 		isComplete := 0
 		if bar.IsComplete {
 			isComplete = 1
 		}
 		_, err = tx.ExecContext(ctx, stmt,
-			bar.TsCode, string(bar.Frequency), bar.BarTime.Format(time.RFC3339Nano),
+			bar.TsCode, string(bar.Frequency), barTime,
 			bar.Open, bar.High, bar.Low, bar.Close, bar.Volume, bar.Amount,
 			string(bar.AdjustMode), string(bar.VolumeUnit), bar.Source, isComplete,
 			bar.FetchedAt.Format(time.RFC3339Nano))
