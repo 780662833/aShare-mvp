@@ -182,6 +182,32 @@ def _latest_signal_values(rows: Any, freq: str) -> dict[str, str]:
     return result
 
 
+def _signal_lifecycles(rows: Any, freq: str) -> dict[str, dict[str, Any]]:
+    """为最新信号计算连续状态年龄及起始 K 线时间。
+
+    年龄按连续相同信号值的已完成 K 线计数；最新 K 线为 0。
+    仅使用本次 CZSC 实际生成的历史行，不从自然时间差猜测交易 bar 数。
+    """
+    latest_signals = _latest_signal_values(rows, freq)
+    result: dict[str, dict[str, Any]] = {}
+    for key, value in latest_signals.items():
+        age_bars = 0
+        start_row = rows[-1]
+        for row in reversed(rows[:-1]):
+            if not isinstance(row, dict) or row.get(key) != value:
+                break
+            age_bars += 1
+            start_row = row
+        started_at = start_row.get("dt")
+        if started_at is None:
+            raise RuntimeError(f"CZSC 信号历史缺少 dt，无法确定 {key!r} 的起始时间")
+        result[key] = {
+            "age_bars": age_bars,
+            "started_at": _market_iso(started_at),
+        }
+    return result
+
+
 def validate_payload(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("请求体必须是 JSON object")
@@ -281,6 +307,7 @@ def analyze_payload(payload: Any) -> dict[str, Any]:
     analyzer = CZSC(raw_bars)
 
     signals: dict[str, str] = {}
+    signal_lifecycles: dict[str, dict[str, Any]] = {}
     if request["signals_config"]:
         rows = generate_czsc_signals(
             raw_bars,
@@ -290,6 +317,7 @@ def analyze_payload(payload: Any) -> dict[str, Any]:
             df=False,
         )
         signals = _latest_signal_values(rows, request["freq"])
+        signal_lifecycles = _signal_lifecycles(rows, request["freq"])
 
     signal_data_status = _signal_data_status(
         request["signal_profile"], analyzer, len(raw_bars)
@@ -339,6 +367,7 @@ def analyze_payload(payload: Any) -> dict[str, Any]:
         "czsc_source_revision": CZSC_SOURCE_REVISION,
         "signal_data_status": signal_data_status,
         "signals": signals,
+        "signal_lifecycles": signal_lifecycles,
         "as_of": request["bars"][-1]["dt"].isoformat(),
         "input_bar_count": len(raw_bars),
         "fx_count": len(analyzer.fx_list),
