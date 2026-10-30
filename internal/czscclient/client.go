@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -139,10 +140,74 @@ func BuildRequest(bars []marketdata.Bar) (AnalyzeRequest, error) {
 	return request, nil
 }
 
+func validateAnalyzeRequest(request AnalyzeRequest) error {
+	if request.SchemaVersion != SchemaVersion {
+		return fmt.Errorf("CZSC schema_version 必须为 %s", SchemaVersion)
+	}
+	if strings.TrimSpace(request.TsCode) == "" || !strings.Contains(request.TsCode, ".") {
+		return fmt.Errorf("CZSC ts_code 必须包含证券代码和交易所后缀")
+	}
+	switch request.Freq {
+	case "日线", "30分钟", "60分钟":
+	default:
+		return fmt.Errorf("CZSC 周期无效: %q", request.Freq)
+	}
+	switch request.AdjustMode {
+	case string(marketdata.AdjustQFQ), string(marketdata.AdjustHFQ), string(marketdata.AdjustNone):
+	default:
+		return fmt.Errorf("CZSC 复权口径无效: %q", request.AdjustMode)
+	}
+	if strings.TrimSpace(request.Source) == "" {
+		return fmt.Errorf("CZSC 数据来源不能为空")
+	}
+	if len(request.Bars) == 0 || len(request.Bars) > 5000 {
+		return fmt.Errorf("CZSC K 线数量必须在 1 到 5000 之间")
+	}
+
+	var previous time.Time
+	for i, bar := range request.Bars {
+		if !strings.EqualFold(bar.Symbol, request.TsCode) {
+			return fmt.Errorf("bars[%d].symbol 与 ts_code 不一致", i)
+		}
+		dt, err := time.Parse(time.RFC3339Nano, bar.DT)
+		if err != nil {
+			return fmt.Errorf("bars[%d].dt 不是有效 RFC3339 时间: %w", i, err)
+		}
+		_, offset := dt.Zone()
+		if offset != marketdata.ShanghaiOffsetSeconds {
+			return fmt.Errorf("bars[%d].dt 必须显式使用 +08:00", i)
+		}
+		if i > 0 && !dt.After(previous) {
+			return fmt.Errorf("bars[%d].dt 必须严格递增", i)
+		}
+		previous = dt
+		if !finitePositive(bar.Open) || !finitePositive(bar.Close) ||
+			!finitePositive(bar.High) || !finitePositive(bar.Low) {
+			return fmt.Errorf("bars[%d] OHLC 必须为有限正数", i)
+		}
+		if bar.High < math.Max(bar.Open, math.Max(bar.Close, bar.Low)) ||
+			bar.Low > math.Min(bar.Open, math.Min(bar.Close, bar.High)) {
+			return fmt.Errorf("bars[%d] OHLC 关系无效", i)
+		}
+		if !finiteNonNegative(bar.Vol) || !finiteNonNegative(bar.Amount) {
+			return fmt.Errorf("bars[%d] 成交量和成交额必须为有限非负数", i)
+		}
+	}
+	return nil
+}
+
+func finitePositive(value float64) bool {
+	return value > 0 && !math.IsNaN(value) && !math.IsInf(value, 0)
+}
+
+func finiteNonNegative(value float64) bool {
+	return value >= 0 && !math.IsNaN(value) && !math.IsInf(value, 0)
+}
+
 func (c *Client) Analyze(ctx context.Context, request AnalyzeRequest) (AnalyzeResponse, error) {
 	var result AnalyzeResponse
-	if request.SchemaVersion != SchemaVersion || len(request.Bars) == 0 {
-		return result, fmt.Errorf("CZSC 请求契约无效")
+	if err := validateAnalyzeRequest(request); err != nil {
+		return result, fmt.Errorf("CZSC 请求契约无效: %w", err)
 	}
 	body, err := json.Marshal(request)
 	if err != nil {
@@ -163,9 +228,12 @@ func (c *Client) Analyze(ctx context.Context, request AnalyzeRequest) (AnalyzeRe
 		return result, fmt.Errorf("调用 CZSC 服务失败: %w", err)
 	}
 	defer response.Body.Close()
-	responseBody, err := io.ReadAll(io.LimitReader(response.Body, MaxResponseBytes))
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, MaxResponseBytes+1))
 	if err != nil {
 		return result, fmt.Errorf("读取 CZSC 响应失败: %w", err)
+	}
+	if len(responseBody) > MaxResponseBytes {
+		return result, fmt.Errorf("CZSC 响应超过 %d 字节上限", MaxResponseBytes)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return result, fmt.Errorf("CZSC 服务返回 HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(responseBody)))
@@ -173,8 +241,15 @@ func (c *Client) Analyze(ctx context.Context, request AnalyzeRequest) (AnalyzeRe
 	if err := json.Unmarshal(responseBody, &result); err != nil {
 		return result, fmt.Errorf("解析 CZSC 响应失败: %w", err)
 	}
-	if result.SchemaVersion != SchemaVersion || result.TsCode != request.TsCode || result.Freq != request.Freq {
-		return result, fmt.Errorf("CZSC 响应与请求的 schema/证券/周期不匹配")
+	lastBar := request.Bars[len(request.Bars)-1]
+	if result.SchemaVersion != request.SchemaVersion ||
+		result.TsCode != request.TsCode ||
+		result.Freq != request.Freq ||
+		result.AdjustMode != request.AdjustMode ||
+		result.Source != request.Source ||
+		result.InputBarCount != len(request.Bars) ||
+		result.AsOf != lastBar.DT {
+		return result, fmt.Errorf("CZSC 响应与请求的 schema/证券/周期/复权/来源/数据范围不匹配")
 	}
 	return result, nil
 }
