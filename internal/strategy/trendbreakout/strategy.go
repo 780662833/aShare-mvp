@@ -213,7 +213,10 @@ func (s *Strategy) Evaluate(ctx context.Context, input contract.StrategyInput) (
 		Confidence: contract.GradeHigh,
 	})
 
-	if d1.SignalAgeBars != nil && *d1.SignalAgeBars > s.config.MaxSignalAgeDays {
+	if d1.SignalAgeBars == nil {
+		return wait(decision, "BREAKOUT_SIGNAL_AGE_UNKNOWN", "缺少日线突破信号持续交易日年龄，无法确认信号仍处于有效观察窗口"), nil
+	}
+	if *d1.SignalAgeBars > s.config.MaxSignalAgeDays {
 		decision.Status = contract.StatusExpired
 		contract.AppendReason(&decision, "BREAKOUT_SETUP_EXPIRED")
 		decision.RiskWarnings = append(decision.RiskWarnings, contract.Evidence{
