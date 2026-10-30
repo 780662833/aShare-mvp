@@ -130,3 +130,20 @@ func TestFrequencyMappingAndCodeParsing(t *testing.T) {
 		t.Fatal("不带交易所后缀的代码应被拒绝")
 	}
 }
+
+
+func TestNormalizeBarTimeRejectsUnknownIntradayBoundary(t *testing.T) {
+	// 09:30 是当日第一个 30 分钟交易区间的起点，不是统一模型约定的结束时间。
+	item := proto.SecurityBar{Year: 2026, Month: 10, Day: 30, Hour: 9, Minute: 30}
+	if _, err := normalizeBarTime(item, marketdata.FrequencyM30); err == nil {
+		t.Fatal("未核实为 K 线结束时间的分钟标签必须被拒绝")
+	}
+	item.Hour, item.Minute = 10, 0
+	if _, err := normalizeBarTime(item, marketdata.FrequencyM30); err != nil {
+		t.Fatalf("合法 30 分钟结束边界被拒绝: %v", err)
+	}
+	item.Hour, item.Minute = 10, 0
+	if _, err := normalizeBarTime(item, marketdata.FrequencyM60); err == nil {
+		t.Fatal("10:00 不是本项目定义的 60 分钟 K 线结束边界")
+	}
+}
