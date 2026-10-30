@@ -87,19 +87,26 @@ type BISummary struct {
 
 // FrequencyAnalysis 是单一周期的 CZSC 快照。
 // Signals 保留 CZSC 原始 key/value；策略层只解析自己白名单中的 key。
+type SignalLifecycle struct {
+	// AgeBars 为末根已完成 K 线相对该信号连续状态起点的距离，起点当根为 0。
+	AgeBars int       `json:"age_bars"`
+	StartedAt time.Time `json:"started_at"`
+}
+
 type FrequencyAnalysis struct {
-	AsOf                 time.Time          `json:"as_of"`
-	InputBarCount        int                `json:"input_bar_count"`
-	SignalProfile        string             `json:"signal_profile"`
-	SignalProfileVersion string             `json:"signal_profile_version"`
-	CZSCSourceRevision   string             `json:"czsc_source_revision"`
-	SignalDataStatus     string             `json:"signal_data_status"`
-	Signals              map[string]string  `json:"signals"`
-	BICount              int                `json:"bi_count"`
-	RecentBI             []BISummary        `json:"recent_bi"`
-	// SignalAgeBars is supplied by an upstream lifecycle tracker.
-	// nil means age is unknown; strategies must not invent an age.
-	SignalAgeBars        *int               `json:"signal_age_bars,omitempty"`
+	AsOf                 time.Time                    `json:"as_of"`
+	InputBarCount        int                          `json:"input_bar_count"`
+	SignalProfile        string                       `json:"signal_profile"`
+	SignalProfileVersion string                       `json:"signal_profile_version"`
+	CZSCSourceRevision   string                       `json:"czsc_source_revision"`
+	SignalDataStatus     string                       `json:"signal_data_status"`
+	Signals              map[string]string            `json:"signals"`
+	SignalLifecycles     map[string]SignalLifecycle   `json:"signal_lifecycles,omitempty"`
+	BICount              int                          `json:"bi_count"`
+	RecentBI             []BISummary                  `json:"recent_bi"`
+	// SignalAgeBars 仅保留给直接调用策略的旧测试/迁移输入。
+	// 应用层正式链路使用按信号 key 区分的 SignalLifecycles。
+	SignalAgeBars        *int                         `json:"signal_age_bars,omitempty"`
 }
 
 type MarketContext struct {
