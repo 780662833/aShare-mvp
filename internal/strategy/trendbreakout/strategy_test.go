@@ -180,6 +180,9 @@ func TestEvaluateWaitsWhenM60DoesNotHoldBreakout(t *testing.T) {
 	}
 	input := trendInput()
 	m60 := input.Bars[marketdata.FrequencyM60]
+	m60[len(m60)-1].Open = 112.2
+	m60[len(m60)-1].High = 112.5
+	m60[len(m60)-1].Low = 111.5
 	m60[len(m60)-1].Close = 112.0
 	input.Bars[marketdata.FrequencyM60] = m60
 
@@ -199,8 +202,8 @@ func TestEvaluateFlagsM60BreakoutFailureRisk(t *testing.T) {
 	}
 	input := trendInput()
 	m60 := input.Bars[marketdata.FrequencyM60]
-	m60[0].Close = 112.5
-	m60[1].Close = 112.8
+	m60[0].Open, m60[0].High, m60[0].Low, m60[0].Close = 112.7, 113.0, 112.0, 112.5
+	m60[1].Open, m60[1].High, m60[1].Low, m60[1].Close = 113.0, 113.3, 112.3, 112.8
 	input.Bars[marketdata.FrequencyM60] = m60
 
 	decision, err := strategy.Evaluate(context.Background(), input)
