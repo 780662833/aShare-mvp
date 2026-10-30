@@ -174,3 +174,132 @@ func TestEvaluateSymbolFailsClosedWhenStoredBarsAreMissing(t *testing.T) {
 		t.Fatalf("数据质量预检失败后不应调用 CZSC，调用次数=%d", analyzer.calls)
 	}
 }
+
+
+type recordingAnalyzer struct {
+	requests []czscclient.AnalyzeRequest
+}
+
+func (a *recordingAnalyzer) Analyze(_ context.Context, request czscclient.AnalyzeRequest) (czscclient.AnalyzeResponse, error) {
+	a.requests = append(a.requests, request)
+	signals := make(map[string]string)
+	lifecycles := make(map[string]czscclient.SignalLifecycle)
+	profileVersion := ""
+	switch request.SignalProfile {
+	case czscclient.SignalProfileChan3BuyM60:
+		profileVersion = "chan3buy-m60-v1"
+		for _, key := range []string{
+			"60分钟_D1_三买辅助V230228",
+			"60分钟_D1#SMA#34_BS3辅助V230318",
+			"60分钟_D1#SMA#34_BS3辅助V230319",
+		} {
+			signals[key] = "其他_任意_任意_0"
+			lifecycles[key] = czscclient.SignalLifecycle{AgeBars: 0, StartedAt: request.Bars[len(request.Bars)-1].DT}
+		}
+	case czscclient.SignalProfileChan3BuyM30:
+		profileVersion = "chan3buy-m30-timing-v1"
+		key := "30分钟_D1_表里关系V230102"
+		signals[key] = "向下_延伸_任意_0"
+		lifecycles[key] = czscclient.SignalLifecycle{AgeBars: 0, StartedAt: request.Bars[len(request.Bars)-1].DT}
+	case czscclient.SignalProfileTrendD1:
+		profileVersion = "trend-breakout-d1-v1"
+		lookbackKey := "日线_D1W21_事件V240428"
+		ma20Key := "日线_D1SMA#20_分类V221101"
+		ma60Key := "日线_D1SMA#60_分类V221101"
+		volumeKey := "日线_D1VOL#SMA#20_分类V230214"
+		for _, key := range []string{lookbackKey, ma20Key, ma60Key, volumeKey} {
+			signals[key] = "其他_任意_任意_0"
+			lifecycles[key] = czscclient.SignalLifecycle{AgeBars: 0, StartedAt: request.Bars[len(request.Bars)-1].DT}
+		}
+	default:
+		return czscclient.AnalyzeResponse{}, errors.New("unexpected signal profile")
+	}
+	return czscclient.AnalyzeResponse{
+		SchemaVersion: czscclient.SchemaVersion,
+		TsCode: request.TsCode,
+		Freq: request.Freq,
+		AdjustMode: request.AdjustMode,
+		Source: request.Source,
+		SignalProfile: request.SignalProfile,
+		SignalProfileVersion: profileVersion,
+		CZSCSourceRevision: czscclient.CZSCSourceRevision,
+		SignalDataStatus: "READY",
+		Signals: signals,
+		SignalLifecycles: lifecycles,
+		AsOf: request.Bars[len(request.Bars)-1].DT,
+		InputBarCount: len(request.Bars),
+	}, nil
+}
+
+func completeFixtureBar(frequency marketdata.Frequency, at, fetchedAt time.Time, close float64) marketdata.Bar {
+	return marketdata.Bar{
+		TsCode: "600519.SH", Frequency: frequency, BarTime: at,
+		Open: close - 0.2, High: close + 0.5, Low: close - 0.5, Close: close,
+		Volume: 1000, Amount: close * 1000,
+		AdjustMode: marketdata.AdjustQFQ,
+		VolumeUnit: marketdata.VolumeSourceNative,
+		Source: "gotdx", IsComplete: true, FetchedAt: fetchedAt,
+	}
+}
+
+func TestEvaluateSymbolOrchestratesThreeCZSCProfilesAndTwoIndependentStrategies(t *testing.T) {
+	repo := validRepository()
+	asOf := marketdata.ShanghaiWallTime(2026, 10, 30, 11, 1)
+	fetchedAt := marketdata.ShanghaiWallTime(2026, 10, 30, 10, 59)
+
+	daily := make([]marketdata.Bar, 0, 64)
+	start := marketdata.ShanghaiWallTime(2026, 8, 27, 15, 0)
+	for i := 0; i < 64; i++ {
+		close := 100 + float64(i)*0.15
+		at := start.AddDate(0, 0, i)
+		daily = append(daily, completeFixtureBar(marketdata.FrequencyD1, at, fetchedAt, close))
+	}
+	repo.bars[marketdata.FrequencyD1] = daily
+	repo.bars[marketdata.FrequencyM60] = []marketdata.Bar{
+		completeFixtureBar(marketdata.FrequencyM60, marketdata.ShanghaiWallTime(2026, 10, 30, 10, 30), fetchedAt, 110),
+	}
+	repo.bars[marketdata.FrequencyM30] = []marketdata.Bar{
+		completeFixtureBar(marketdata.FrequencyM30, marketdata.ShanghaiWallTime(2026, 10, 30, 10, 30), fetchedAt, 110),
+		completeFixtureBar(marketdata.FrequencyM30, marketdata.ShanghaiWallTime(2026, 10, 30, 11, 0), asOf, 110.2),
+	}
+
+	analyzer := &recordingAnalyzer{}
+	service, err := New(repo, analyzer, validConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.EvaluateSymbol(context.Background(), "600519.SH", asOf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(analyzer.requests) != 3 {
+		t.Fatalf("应恰好调用三次 CZSC（M60/M30/D1），实际 %d", len(analyzer.requests))
+	}
+	gotProfiles := map[string]bool{}
+	for _, request := range analyzer.requests {
+		gotProfiles[request.SignalProfile] = true
+	}
+	for _, expected := range []string{
+		czscclient.SignalProfileChan3BuyM60,
+		czscclient.SignalProfileChan3BuyM30,
+		czscclient.SignalProfileTrendD1,
+	} {
+		if !gotProfiles[expected] {
+			t.Errorf("缺少 CZSC profile %q", expected)
+		}
+	}
+	if len(result.Decisions) != 2 || len(repo.saved) != 2 {
+		t.Fatalf("双策略必须分别返回并持久化结论：decisions=%d saved=%d", len(result.Decisions), len(repo.saved))
+	}
+	if result.Decisions[0].StrategyID != chan3buy.StrategyID ||
+		result.Decisions[1].StrategyID != trendbreakout.StrategyID {
+		t.Fatalf("策略结论身份或顺序错误: %+v", result.Decisions)
+	}
+	if result.Decisions[0].Status != contract.StatusWatching ||
+		result.Decisions[1].Status != contract.StatusWatching {
+		t.Fatalf("测试中 CZSC 主信号均未命中，两套策略应分别保留 WATCHING: %+v", result.Decisions)
+	}
+	if result.MarketStatus != contract.MarketUnknown {
+		t.Fatalf("尚无市场环境数据时应显式保留 UNKNOWN，得到 %s", result.MarketStatus)
+	}
+}
