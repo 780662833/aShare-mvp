@@ -277,23 +277,40 @@ func (s *Store) UpsertBars(ctx context.Context, bars []marketdata.Bar) error {
 		open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close,
 		volume=excluded.volume, amount=excluded.amount, volume_unit=excluded.volume_unit,
 		source=excluded.source, is_complete=excluded.is_complete, fetched_at=excluded.fetched_at`
-	for _, bar := range bars {
-		barTime := bar.BarTime.Format(time.RFC3339Nano)
+	first := bars[0]
+	sourceRows, err := tx.QueryContext(ctx, `SELECT DISTINCT source FROM stock_kline
+		WHERE ts_code = ? AND freq = ? AND adjust_mode = ?`,
+		first.TsCode, string(first.Frequency), string(first.AdjustMode))
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("读取现有 K 线来源失败: %w", err)
+	}
+	for sourceRows.Next() {
 		var currentSource string
-		err := tx.QueryRowContext(ctx, `SELECT source FROM stock_kline
-			WHERE ts_code = ? AND freq = ? AND adjust_mode = ? AND bar_time = ?`,
-			bar.TsCode, string(bar.Frequency), string(bar.AdjustMode), barTime,
-		).Scan(&currentSource)
-		if err != nil && err != sql.ErrNoRows {
+		if err := sourceRows.Scan(&currentSource); err != nil {
+			_ = sourceRows.Close()
 			_ = tx.Rollback()
 			return fmt.Errorf("读取现有 K 线来源失败: %w", err)
 		}
-		if err == nil && currentSource != bar.Source {
+		if currentSource != first.Source {
+			_ = sourceRows.Close()
 			_ = tx.Rollback()
-			return fmt.Errorf("拒绝跨数据源覆盖 K 线 %s %s %s：已有来源 %q，新来源 %q；需先单独核对重叠区间",
-				bar.TsCode, bar.Frequency, barTime, currentSource, bar.Source)
+			return fmt.Errorf("拒绝混合 K 线数据源：%s %s %s 已有来源 %q，新批次来源 %q；需先单独核对重叠区间并执行显式迁移",
+				first.TsCode, first.Frequency, first.AdjustMode, currentSource, first.Source)
 		}
+	}
+	if err := sourceRows.Err(); err != nil {
+		_ = sourceRows.Close()
+		_ = tx.Rollback()
+		return fmt.Errorf("遍历现有 K 线来源失败: %w", err)
+	}
+	if err := sourceRows.Close(); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("关闭 K 线来源查询失败: %w", err)
+	}
 
+	for _, bar := range bars {
+		barTime := bar.BarTime.Format(time.RFC3339Nano)
 		isComplete := 0
 		if bar.IsComplete {
 			isComplete = 1
