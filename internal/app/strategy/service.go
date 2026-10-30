@@ -123,7 +123,6 @@ func (s *Service) EvaluateSymbol(ctx context.Context, tsCode string, asOf time.T
 		},
 	}
 	issues := make([]string, 0)
-	asOfDate := asOf.Format("2006-01-02")
 	expectedTimes, stateDate, calendarIssues := expectedBarTimes(
 		ctx, s.repo, calendar.Exchange(security.Exchange), asOf,
 	)
