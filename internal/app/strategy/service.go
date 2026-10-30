@@ -366,51 +366,57 @@ func expectedBarTimes(
 	}
 
 	var stateDate string
-	var latestOpen calendar.TradeDay
+	var previousOpen calendar.TradeDay
 	if day.IsOpen {
 		stateDate = date
-		latestOpen, err = repo.GetLatestOpenTradeDay(ctx, exchange, date)
-		if err != nil || latestOpen.CalDate != date {
+		currentOpen, currentErr := repo.GetLatestOpenTradeDay(ctx, exchange, date)
+		if currentErr != nil || currentOpen.CalDate != date {
 			issues = append(issues, "LATEST_OPEN_TRADE_DAY_UNKNOWN")
 		}
+
+		previousOpen, err = findPreviousKnownOpenDay(ctx, repo, exchange, date)
+		if err != nil {
+			issues = append(issues, "PREVIOUS_TRADING_CALENDAR_UNKNOWN")
+		}
 	} else {
-		latestOpen, err = repo.GetLatestOpenTradeDay(ctx, exchange, date)
+		previousOpen, err = findPreviousKnownOpenDay(ctx, repo, exchange, date)
 		if err != nil {
 			issues = append(issues, "LATEST_OPEN_TRADE_DAY_UNKNOWN")
 			return expected, "", issues
 		}
-		stateDate = latestOpen.CalDate
+		stateDate = previousOpen.CalDate
+	}
+
+	if previousOpen.CalDate != "" {
+		previousDate := asOf.AddDate(0, 0, -1).Format("2006-01-02")
+		indexedPreviousOpen, indexedErr := repo.GetLatestOpenTradeDay(ctx, exchange, previousDate)
+		if indexedErr != nil || indexedPreviousOpen.CalDate != previousOpen.CalDate {
+			issues = append(issues, "TRADING_CALENDAR_INDEX_MISMATCH")
+		}
 	}
 
 	if !day.IsOpen {
-		fallback, parseErr := closeTime(latestOpen.CalDate)
+		if previousOpen.CalDate == "" {
+			issues = append(issues, "LATEST_OPEN_TRADE_DAY_UNKNOWN")
+			return expected, stateDate, unique(issues)
+		}
+		fallback, parseErr := closeTime(previousOpen.CalDate)
 		if parseErr != nil {
 			issues = append(issues, "LATEST_OPEN_TRADE_DAY_INVALID")
-			return expected, stateDate, issues
+			return expected, stateDate, unique(issues)
 		}
 		for _, frequency := range []marketdata.Frequency{marketdata.FrequencyD1, marketdata.FrequencyM60, marketdata.FrequencyM30} {
 			expected[frequency] = fallback
 		}
-		return expected, stateDate, issues
+		return expected, stateDate, unique(issues)
 	}
 
-	priorDate := asOf.AddDate(0, 0, -1).Format("2006-01-02")
-	priorCalendarDay, priorCalendarErr := repo.GetTradeDay(ctx, exchange, priorDate)
-	if priorCalendarErr != nil {
-		issues = append(issues, "PREVIOUS_TRADING_CALENDAR_UNKNOWN")
-	}
-	priorOpen, priorErr := repo.GetLatestOpenTradeDay(ctx, exchange, priorDate)
-	var priorClose time.Time
-	if priorErr == nil {
-		if priorCalendarErr == nil && priorCalendarDay.IsOpen && priorOpen.CalDate != priorDate {
-			issues = append(issues, "PREVIOUS_TRADE_DAY_CONFLICT")
-		}
-		priorClose, err = closeTime(priorOpen.CalDate)
+	priorClose := time.Time{}
+	if previousOpen.CalDate != "" {
+		priorClose, err = closeTime(previousOpen.CalDate)
 		if err != nil {
 			issues = append(issues, "PREVIOUS_TRADE_DAY_INVALID")
 		}
-	} else {
-		issues = append(issues, "PREVIOUS_TRADE_DAY_UNKNOWN")
 	}
 
 	dailyClose, _ := closeTime(date)
@@ -425,7 +431,32 @@ func expectedBarTimes(
 			expected[frequency] = priorClose
 		}
 	}
-	return expected, stateDate, issues
+	return expected, stateDate, unique(issues)
+}
+
+// findPreviousKnownOpenDay 逐日核实自然日历，遇到未知日期即失败，不跨过日历缺口猜测最近开市日。
+func findPreviousKnownOpenDay(
+	ctx context.Context,
+	repo Repository,
+	exchange calendar.Exchange,
+	beforeDate string,
+) (calendar.TradeDay, error) {
+	day, err := time.ParseInLocation("2006-01-02", beforeDate, marketdata.ShanghaiLocation())
+	if err != nil {
+		return calendar.TradeDay{}, fmt.Errorf("基准日期无效: %w", err)
+	}
+	const maxCalendarLookbackDays = 31
+	for offset := 1; offset <= maxCalendarLookbackDays; offset++ {
+		date := day.AddDate(0, 0, -offset).Format("2006-01-02")
+		record, err := repo.GetTradeDay(ctx, exchange, date)
+		if err != nil {
+			return calendar.TradeDay{}, fmt.Errorf("交易日历缺少 %s: %w", date, err)
+		}
+		if record.IsOpen {
+			return record, nil
+		}
+	}
+	return calendar.TradeDay{}, fmt.Errorf("向前 %d 个自然日内没有已知开市日", maxCalendarLookbackDays)
 }
 
 func closeTime(date string) (time.Time, error) {
