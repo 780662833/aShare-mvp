@@ -80,6 +80,7 @@ func trendInput() contract.StrategyInput {
 				SignalProfileVersion: d1ProfileVersion,
 				CZSCSourceRevision: czscclient.CZSCSourceRevision,
 				SignalDataStatus: "READY",
+				SignalAgeBars: intPtr(0),
 				Signals: map[string]string{
 					"日线_D1W21_事件V240428": "收盘新高_任意_任意_0",
 					"日线_D1W31_事件V240428": "其他_任意_任意_0",
@@ -299,6 +300,26 @@ func TestNewRejectsUnversionedOrUnspecifiedThresholds(t *testing.T) {
 		t.Fatal("未配置量比门槛时必须拒绝创建策略")
 	}
 }
+
+func TestEvaluateWaitsWhenSignalAgeIsUnknown(t *testing.T) {
+	strategy, err := New(trendConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := trendInput()
+	d1 := input.Technical[marketdata.FrequencyD1]
+	d1.SignalAgeBars = nil
+	input.Technical[marketdata.FrequencyD1] = d1
+	decision, err := strategy.Evaluate(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Status != contract.StatusWaitEntry || !hasReason(decision, "BREAKOUT_SIGNAL_AGE_UNKNOWN") {
+		t.Fatalf("突破信号年龄未知时必须等待: %+v", decision)
+	}
+}
+
+func intPtr(value int) *int { return &value }
 
 func hasReason(decision contract.StrategyDecision, code string) bool {
 	for _, reason := range decision.ReasonCodes {
