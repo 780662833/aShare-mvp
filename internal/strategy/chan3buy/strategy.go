@@ -17,7 +17,7 @@ import (
 
 const (
 	StrategyID      = "chan3buy"
-	StrategyVersion = "1.0.0"
+	StrategyVersion = "1.1.0"
 
 	m60Profile        = czscclient.SignalProfileChan3BuyM60
 	m60ProfileVersion = "chan3buy-m60-v1"
