@@ -81,3 +81,46 @@ func TestAnalyzeHTTPRoundTrip(t *testing.T) {
 		t.Fatalf("响应不匹配: %+v", response)
 	}
 }
+
+
+func TestValidateAnalyzeRequestRejectsWrongShanghaiOffset(t *testing.T) {
+	at := time.Date(2026, 10, 30, 10, 0, 0, 0, marketdata.ShanghaiLocation())
+	request, err := BuildRequest([]marketdata.Bar{completeBar(at)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Bars[0].DT = at.UTC().Format(time.RFC3339)
+	if err := validateAnalyzeRequest(request); err == nil {
+		t.Fatal("CZSC 请求必须拒绝 UTC 时间戳")
+	}
+}
+
+func TestAnalyzeRejectsResponseFromDifferentSource(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input AnalyzeRequest
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(AnalyzeResponse{
+			SchemaVersion: SchemaVersion, TsCode: input.TsCode, Freq: input.Freq,
+			AdjustMode: input.AdjustMode, Source: "another-provider",
+			AsOf: input.Bars[len(input.Bars)-1].DT,
+			InputBarCount: len(input.Bars),
+		})
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, time.Second, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 10, 30, 10, 0, 0, 0, marketdata.ShanghaiLocation())
+	request, err := BuildRequest([]marketdata.Bar{completeBar(at)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Analyze(context.Background(), request); err == nil {
+		t.Fatal("CZSC 响应的数据来源不匹配时必须拒绝")
+	}
+}
