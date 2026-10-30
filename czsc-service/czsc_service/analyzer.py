@@ -1,7 +1,8 @@
-"""CZSC 1.0.x 分析适配；所有缠论结构由 CZSC 原生实现。"""
+"""CZSC 1.0.x 分析适配；所有缠论结构和原生信号由 CZSC 实现。"""
 
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import math
 from typing import Any
@@ -10,6 +11,85 @@ FREQ_MAP = {"日线": "D", "30分钟": "F30", "60分钟": "F60"}
 VALID_ADJUST = {"QFQ", "HFQ", "NONE"}
 MAX_BARS = 5000
 SHANGHAI_TZ = timezone(timedelta(hours=8))
+
+# 与 requirements.txt 中精确锁定的 CZSC commit 保持一致。
+CZSC_SOURCE_REVISION = "5d350a943d6b1935561765fed5467c234973d121"
+
+# 信号配置是服务端白名单；请求方只能选择 profile，不能传入任意 Rust 信号函数。
+SIGNAL_PROFILES: dict[str, dict[str, Any]] = {
+    "structure_only": {
+        "version": "structure-only-v1",
+        "freq": None,
+        "signals": [],
+        "min_bars": 1,
+        "min_bi_count": 0,
+    },
+    "chan3buy_m60_v1": {
+        "version": "chan3buy-m60-v1",
+        "freq": "60分钟",
+        "signals": [
+            {"name": "cxt_third_buy_V230228", "freq": "60分钟", "di": 1},
+            {
+                "name": "cxt_third_bs_V230318",
+                "freq": "60分钟",
+                "di": 1,
+                "ma_type": "SMA",
+                "timeperiod": 34,
+            },
+            {
+                "name": "cxt_third_bs_V230319",
+                "freq": "60分钟",
+                "di": 1,
+                "ma_type": "SMA",
+                "timeperiod": 34,
+            },
+        ],
+        "min_bars": 1,
+        "min_bi_count": 12,
+    },
+    "chan3buy_m30_timing_v1": {
+        "version": "chan3buy-m30-timing-v1",
+        "freq": "30分钟",
+        "signals": [
+            {"name": "cxt_bi_status_V230102", "freq": "30分钟"},
+        ],
+        "min_bars": 1,
+        "min_bi_count": 3,
+    },
+    "trend_breakout_d1_v1": {
+        "version": "trend-breakout-d1-v1",
+        "freq": "日线",
+        "signals": [
+            {"name": "bar_break_V240428", "freq": "日线", "di": 1, "w": 21},
+            {"name": "bar_break_V240428", "freq": "日线", "di": 1, "w": 31},
+            {"name": "bar_break_V240428", "freq": "日线", "di": 1, "w": 56},
+            {
+                "name": "tas_ma_base_V221101",
+                "freq": "日线",
+                "di": 1,
+                "ma_type": "SMA",
+                "timeperiod": 20,
+            },
+            {
+                "name": "tas_ma_base_V221101",
+                "freq": "日线",
+                "di": 1,
+                "ma_type": "SMA",
+                "timeperiod": 60,
+            },
+            {
+                "name": "vol_single_ma_V230214",
+                "freq": "日线",
+                "di": 1,
+                "ma_type": "SMA",
+                "timeperiod": 20,
+            },
+        ],
+        # bar_break_V240428 对 w=56 要求至少 7+w 根原始 K 线。
+        "min_bars": 63,
+        "min_bi_count": 0,
+    },
+}
 
 
 def _finite_number(value: Any, field: str, *, positive: bool = False) -> float:
@@ -55,6 +135,53 @@ def _market_iso(value: Any) -> str:
     return str(value)
 
 
+def _resolve_signal_profile(profile: Any, freq: str) -> tuple[str, dict[str, Any]]:
+    name = str(profile or "structure_only").strip() or "structure_only"
+    spec = SIGNAL_PROFILES.get(name)
+    if spec is None:
+        raise ValueError(f"不支持的 signal_profile: {name!r}")
+    expected_freq = spec["freq"]
+    if expected_freq is not None and freq != expected_freq:
+        raise ValueError(
+            f"signal_profile {name!r} 只支持 {expected_freq}，当前请求周期为 {freq}"
+        )
+    return name, deepcopy(spec)
+
+
+def _signal_data_status(profile: str, analyzer: Any, bar_count: int) -> str:
+    """标记该 profile 的最低计算数据条件，不代表策略信号是否成立。"""
+    spec = SIGNAL_PROFILES[profile]
+    if bar_count < spec["min_bars"]:
+        return "INSUFFICIENT_DATA"
+    if len(analyzer.bi_list) < spec["min_bi_count"]:
+        return "INSUFFICIENT_DATA"
+    if profile == "chan3buy_m30_timing_v1" and not analyzer.ubi_fxs:
+        return "INSUFFICIENT_DATA"
+    return "READY" if profile != "structure_only" else "NOT_REQUESTED"
+
+
+def _latest_signal_values(rows: Any, freq: str) -> dict[str, str]:
+    if not isinstance(rows, list) or not rows:
+        raise RuntimeError("CZSC 信号引擎未返回最新计算记录")
+    latest = rows[-1]
+    if not isinstance(latest, dict):
+        raise RuntimeError("CZSC 信号引擎最新记录格式无效")
+
+    # CZSC 1.0.x 信号 key 采用「周期_参数_信号名」三段结构；
+    # 过滤掉 dt、symbol 等元信息，保留原始 key/value，不在此处解释含义。
+    prefix = f"{freq}_"
+    result: dict[str, str] = {}
+    for key, value in latest.items():
+        if (
+            isinstance(key, str)
+            and key.startswith(prefix)
+            and len(key.split("_")) == 3
+            and isinstance(value, str)
+        ):
+            result[key] = value
+    return result
+
+
 def validate_payload(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("请求体必须是 JSON object")
@@ -67,6 +194,9 @@ def validate_payload(payload: Any) -> dict[str, Any]:
     freq = str(payload.get("freq", "")).strip()
     if freq not in FREQ_MAP:
         raise ValueError(f"不支持的 CZSC 周期: {freq!r}")
+    signal_profile, profile_spec = _resolve_signal_profile(
+        payload.get("signal_profile", "structure_only"), freq
+    )
     adjust_mode = str(payload.get("adjust_mode", "")).strip().upper()
     if adjust_mode not in VALID_ADJUST:
         raise ValueError("adjust_mode 必须是明确的 QFQ / HFQ / NONE")
@@ -123,6 +253,11 @@ def validate_payload(payload: Any) -> dict[str, Any]:
         "freq_native": FREQ_MAP[freq],
         "adjust_mode": adjust_mode,
         "source": source,
+        "signal_profile": signal_profile,
+        "signal_profile_version": profile_spec["version"],
+        "signals_config": profile_spec["signals"],
+        "min_signal_bars": profile_spec["min_bars"],
+        "min_signal_bi_count": profile_spec["min_bi_count"],
         "bars": bars,
     }
 
@@ -130,7 +265,7 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 def analyze_payload(payload: Any) -> dict[str, Any]:
     request = validate_payload(payload)
     try:
-        from czsc import CZSC, Freq, RawBar
+        from czsc import CZSC, Freq, RawBar, generate_czsc_signals
     except ImportError as exc:
         raise RuntimeError("CZSC 未安装或 Rust/PyO3 扩展不可用") from exc
 
@@ -144,6 +279,21 @@ def analyze_payload(payload: Any) -> dict[str, Any]:
         for index, item in enumerate(request["bars"])
     ]
     analyzer = CZSC(raw_bars)
+
+    signals: dict[str, str] = {}
+    if request["signals_config"]:
+        rows = generate_czsc_signals(
+            raw_bars,
+            signals_config=request["signals_config"],
+            sdt="20170101",
+            init_n=min(500, max(len(raw_bars) - 1, 0)),
+            df=False,
+        )
+        signals = _latest_signal_values(rows, request["freq"])
+
+    signal_data_status = _signal_data_status(
+        request["signal_profile"], analyzer, len(raw_bars)
+    )
 
     recent_fx = [
         {
@@ -184,6 +334,11 @@ def analyze_payload(payload: Any) -> dict[str, Any]:
         "freq": request["freq"],
         "adjust_mode": request["adjust_mode"],
         "source": request["source"],
+        "signal_profile": request["signal_profile"],
+        "signal_profile_version": request["signal_profile_version"],
+        "czsc_source_revision": CZSC_SOURCE_REVISION,
+        "signal_data_status": signal_data_status,
+        "signals": signals,
         "as_of": request["bars"][-1]["dt"].isoformat(),
         "input_bar_count": len(raw_bars),
         "fx_count": len(analyzer.fx_list),
