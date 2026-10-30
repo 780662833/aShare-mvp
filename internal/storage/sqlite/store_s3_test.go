@@ -32,7 +32,7 @@ func TestListRecentBarsAppliesAsOfCompletionAndLimit(t *testing.T) {
 		bar := marketdata.Bar{
 			TsCode: "600519.SH", Frequency: marketdata.FrequencyM30,
 			BarTime: marketdata.ShanghaiWallTime(2026, 10, 30, 9, 30).Add(time.Duration(minute) * time.Minute),
-			Open: 100, High: 103, Low: 99, Close: 101 + float64(i),
+			Open: 100, High: 110, Low: 99, Close: 101 + float64(i),
 			Volume: 1000, Amount: 100000, AdjustMode: marketdata.AdjustQFQ,
 			VolumeUnit: marketdata.VolumeSourceNative, Source: "gotdx",
 			IsComplete: i != 1, FetchedAt: fetchedAt,
