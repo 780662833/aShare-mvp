@@ -65,6 +65,12 @@ func TestStrategyDecisionRepositoryRoundTripAndIdempotency(t *testing.T) {
 	}
 	defer store.Close()
 
+	if err := store.UpsertStockBasics(ctx, []universe.StockBasic{{
+		TsCode: "600519.SH", Symbol: "600519", Name: "贵州茅台",
+		Exchange: universe.ExchangeSSE, ListStatus: universe.ListingActive,
+	}}); err != nil {
+		t.Fatal(err)
+	}
 	asOf := marketdata.ShanghaiWallTime(2026, 10, 30, 15, 1)
 	confirmedAt := marketdata.ShanghaiWallTime(2026, 10, 30, 10, 30)
 	decision := contract.StrategyDecision{
