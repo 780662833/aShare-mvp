@@ -127,6 +127,7 @@ type StrategyInput struct {
 	// PreviousDecision is optional lifecycle context. It is read-only and must
 	// belong to the same symbol, strategy, implementation version and config.
 	PreviousDecision *StrategyDecision                   `json:"previous_decision,omitempty"`
+	DataIssues       []string                            `json:"data_issues,omitempty"`
 }
 
 type StrategyDecision struct {
@@ -201,7 +202,8 @@ func DeterministicDecisionID(tsCode, strategyID, strategyVersion, configVersion 
 // ValidateInput returns stable reason codes for input failures. It never
 // sorts, repairs, fills or otherwise mutates input market data.
 func ValidateInput(input StrategyInput, required []marketdata.Frequency) []string {
-	issues := make([]string, 0)
+	issues := make([]string, 0, len(input.DataIssues))
+	issues = append(issues, input.DataIssues...)
 	if input.AsOf.IsZero() {
 		issues = append(issues, "AS_OF_MISSING")
 	}
@@ -264,6 +266,10 @@ func ValidateInput(input StrategyInput, required []marketdata.Frequency) []strin
 			}
 			if !input.AsOf.IsZero() && bar.BarTime.After(input.AsOf) {
 				issues = append(issues, fmt.Sprintf("BARS_%s_AFTER_AS_OF", frequency))
+				break
+			}
+			if !input.AsOf.IsZero() && bar.FetchedAt.After(input.AsOf) {
+				issues = append(issues, fmt.Sprintf("BARS_%s_FETCHED_AFTER_AS_OF", frequency))
 				break
 			}
 		}
