@@ -42,7 +42,6 @@ func chanInput() contract.StrategyInput {
 		at := start.AddDate(0, 0, i)
 		daily = append(daily, chanBar(marketdata.FrequencyD1, at, close))
 	}
-	lastDaily := daily[len(daily)-1].BarTime
 	m60 := []marketdata.Bar{
 		chanBar(marketdata.FrequencyM60, marketdata.ShanghaiWallTime(2026, 10, 30, 13, 0), 10.8),
 		chanBar(marketdata.FrequencyM60, marketdata.ShanghaiWallTime(2026, 10, 30, 14, 0), 10.9),
