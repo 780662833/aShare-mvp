@@ -4,6 +4,7 @@ package trendbreakout
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -120,6 +121,15 @@ func (s *Strategy) Evaluate(ctx context.Context, input contract.StrategyInput) (
 	}
 	contract.AppendProfile(&decision, marketdata.FrequencyD1, d1)
 	contract.AppendProfile(&decision, marketdata.FrequencyM30, m30)
+	breakoutSignalKey := fmt.Sprintf("日线_D1W%d_事件V240428", s.config.LookbackDays+1)
+	for _, key := range []string{breakoutSignalKey, ma20SignalKey, ma60SignalKey, volumeSignalKey} {
+		if _, ok := d1.Signals[key]; !ok {
+			return dataIncomplete(decision, []string{"TECHNICAL_D1_REQUIRED_SIGNAL_MISSING"}), nil
+		}
+	}
+	if _, ok := m30.Signals[m30TimingKey]; !ok {
+		return dataIncomplete(decision, []string{"TECHNICAL_M30_REQUIRED_SIGNAL_MISSING"}), nil
+	}
 
 	dailyBars := input.Bars[marketdata.FrequencyD1]
 	rangeHigh, err := feature.PreviousRangeHigh(dailyBars, s.config.LookbackDays)
@@ -128,7 +138,6 @@ func (s *Strategy) Evaluate(ctx context.Context, input contract.StrategyInput) (
 	}
 	breakoutThreshold := rangeHigh * (1 + s.config.BreakoutBufferPct/100)
 	latestDaily := dailyBars[len(dailyBars)-1]
-	breakoutSignalKey := fmt.Sprintf("日线_D1W%d_事件V240428", s.config.LookbackDays+1)
 	breakoutParts := signalParts(d1.Signals[breakoutSignalKey])
 	breakoutHit := len(breakoutParts) > 0 && breakoutParts[0] == "收盘新高" &&
 		latestDaily.Close > breakoutThreshold
@@ -239,13 +248,13 @@ func (s *Strategy) Evaluate(ctx context.Context, input contract.StrategyInput) (
 	if trend.State == feature.TrendUnfavorable {
 		return wait(decision, "DAILY_TREND_UNFAVORABLE", "日线趋势环境明确不利，突破事实保留但不升级为买入观察"), nil
 	}
-	if input.MarketContext.Status == contract.MarketUnfavorable {
+	if decision.MarketStatus == contract.MarketUnfavorable {
 		return wait(decision, "MARKET_ENVIRONMENT_UNFAVORABLE", "市场环境明确不利，突破事实保留但不升级为买入观察"), nil
 	}
-	if input.MarketContext.Status == contract.MarketUnknown && !s.config.AllowUnknownMarket {
+	if decision.MarketStatus == contract.MarketUnknown && !s.config.AllowUnknownMarket {
 		return wait(decision, "MARKET_ENVIRONMENT_UNKNOWN", "市场环境未知，当前配置不允许在缺少市场证据时升级"), nil
 	}
-	if input.MarketContext.Status == contract.MarketNeutral && !s.config.AllowNeutralMarket {
+	if decision.MarketStatus == contract.MarketNeutral && !s.config.AllowNeutralMarket {
 		return wait(decision, "MARKET_ENVIRONMENT_NEUTRAL", "市场环境中性，当前配置要求等待更明确的市场条件"), nil
 	}
 
@@ -464,9 +473,9 @@ func findLevel(decision contract.StrategyDecision, code string) (contract.PriceL
 }
 
 func finitePositive(value float64) bool {
-	return value > 0 && value < 1.0e308
+	return value > 0 && !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
 func finiteNonNegative(value float64) bool {
-	return value >= 0 && value < 1.0e308
+	return value >= 0 && !math.IsNaN(value) && !math.IsInf(value, 0)
 }
