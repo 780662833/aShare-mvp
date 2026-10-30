@@ -173,9 +173,16 @@ func (s *Strategy) Evaluate(ctx context.Context, input contract.StrategyInput) (
 		return decision, nil
 	}
 
-	confirmedAt := m60.AsOf
-	decision.ConfirmedAt = &confirmedAt
-	decision.Status = contract.StatusConfirmed
+	if m60.SignalAgeBars == nil {
+		return wait(decision, "THIRD_BUY_SIGNAL_AGE_UNKNOWN", "缺少主三买信号持续 K 线年龄，无法确认信号仍处于有效观察窗口"), nil
+	}
+	if age.AgeBars > s.config.MaxSignalAgeBars {
+		decision.Status = contract.StatusExpired
+		contract.AppendReason(&decision, "THIRD_BUY_SETUP_EXPIRED")
+		decision.RiskWarnings = append(decision.RiskWarnings, contract.Evidence{
+			Code: "THIRD_BUY_SETUP_EXPIRED",
+			Description: "主三买信号超过配置允许的已完成 60 分钟 K 线数量",
+			Value: strconv.Itoa(age.AgeBars),
 	contract.AppendReason(&decision, "THIRD_BUY_MAIN_SIGNAL_CONFIRMED")
 	decision.EntryConditions = append(decision.EntryConditions, contract.Evidence{
 		Code: "THIRD_BUY_MAIN_SIGNAL_CONFIRMED",
@@ -199,7 +206,7 @@ func (s *Strategy) Evaluate(ctx context.Context, input contract.StrategyInput) (
 			Value: strconv.Itoa(*m60.SignalAgeBars),
 			Frequency: string(marketdata.FrequencyM60),
 			ObservedAt: m60.AsOf,
-			Source: "upstream signal lifecycle",
+			Source: "CZSC signal_lifecycles",
 			Confidence: contract.GradeHigh,
 		})
 		return decision, nil
