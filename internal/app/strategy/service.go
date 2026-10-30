@@ -74,6 +74,16 @@ func New(repo Repository, analyzer Analyzer, config Config) (*Service, error) {
 	if config.HistoryBars < 63 || config.HistoryBars > 5000 {
 		return nil, fmt.Errorf("HistoryBars 必须在 63 到 5000 之间")
 	}
+	requiredDailyBars := config.Chan3Buy.DailySlowMAPeriod + 1
+	if breakoutBars := config.TrendBreakout.LookbackDays + 1; breakoutBars > requiredDailyBars {
+		requiredDailyBars = breakoutBars
+	}
+	if requiredDailyBars < 63 {
+		requiredDailyBars = 63 // 锁定 CZSC D1 profile 的最小历史长度。
+	}
+	if config.HistoryBars < requiredDailyBars {
+		return nil, fmt.Errorf("HistoryBars=%d 小于当前策略配置需要的日线历史长度 %d", config.HistoryBars, requiredDailyBars)
+	}
 	chanStrategy, err := chan3buy.New(config.Chan3Buy)
 	if err != nil {
 		return nil, fmt.Errorf("初始化缠论三买策略失败: %w", err)
