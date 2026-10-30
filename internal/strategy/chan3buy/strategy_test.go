@@ -134,8 +134,8 @@ func TestEvaluateDoesNotUseMainSignalAloneAsBuyObservation(t *testing.T) {
 	}
 	input := chanInput()
 	m60 := input.Technical[marketdata.FrequencyM60]
-	delete(m60.Signals, helper318Key)
-	delete(m60.Signals, helper319Key)
+	m60.Signals[helper318Key] = "其他_任意_任意_0"
+	m60.Signals[helper319Key] = "其他_均线否定_任意_0"
 	input.Technical[marketdata.FrequencyM60] = m60
 
 	decision, err := strategy.Evaluate(context.Background(), input)
