@@ -19,6 +19,14 @@ import (
 const (
 	SchemaVersion    = "v1"
 	MaxResponseBytes = 4 << 20
+
+	// CZSCSourceRevision 必须与 czsc-service/requirements.txt 精确锁定的 commit 一致。
+	CZSCSourceRevision = "5d350a943d6b1935561765fed5467c234973d121"
+
+	SignalProfileStructureOnly = "structure_only"
+	SignalProfileChan3BuyM60   = "chan3buy_m60_v1"
+	SignalProfileChan3BuyM30   = "chan3buy_m30_timing_v1"
+	SignalProfileTrendD1       = "trend_breakout_d1_v1"
 )
 
 type BarDTO struct {
@@ -38,6 +46,7 @@ type AnalyzeRequest struct {
 	Freq          string   `json:"freq"`
 	AdjustMode    string   `json:"adjust_mode"`
 	Source        string   `json:"source"`
+	SignalProfile string   `json:"signal_profile,omitempty"`
 	Bars          []BarDTO `json:"bars"`
 }
 
@@ -68,20 +77,25 @@ type ZSSummary struct {
 }
 
 type AnalyzeResponse struct {
-	SchemaVersion string      `json:"schema_version"`
-	TsCode        string      `json:"ts_code"`
-	Freq          string      `json:"freq"`
-	AdjustMode    string      `json:"adjust_mode"`
-	Source        string      `json:"source"`
-	AsOf          string      `json:"as_of"`
-	InputBarCount int         `json:"input_bar_count"`
-	FXCount       int         `json:"fx_count"`
-	BICount       int         `json:"bi_count"`
-	ZSCount       int         `json:"zs_count"`
-	RecentFX      []FXSummary `json:"recent_fx"`
-	RecentBI      []BISummary `json:"recent_bi"`
-	RecentZS      []ZSSummary `json:"recent_zs"`
-	LastBIExtend  bool        `json:"last_bi_extend"`
+	SchemaVersion        string            `json:"schema_version"`
+	TsCode               string            `json:"ts_code"`
+	Freq                 string            `json:"freq"`
+	AdjustMode           string            `json:"adjust_mode"`
+	Source               string            `json:"source"`
+	SignalProfile        string            `json:"signal_profile"`
+	SignalProfileVersion string            `json:"signal_profile_version"`
+	CZSCSourceRevision   string            `json:"czsc_source_revision"`
+	SignalDataStatus     string            `json:"signal_data_status"`
+	Signals              map[string]string `json:"signals"`
+	AsOf                 string            `json:"as_of"`
+	InputBarCount        int               `json:"input_bar_count"`
+	FXCount              int               `json:"fx_count"`
+	BICount              int               `json:"bi_count"`
+	ZSCount              int               `json:"zs_count"`
+	RecentFX             []FXSummary       `json:"recent_fx"`
+	RecentBI             []BISummary       `json:"recent_bi"`
+	RecentZS             []ZSSummary       `json:"recent_zs"`
+	LastBIExtend         bool              `json:"last_bi_extend"`
 }
 
 type Client struct {
@@ -99,13 +113,58 @@ func New(baseURL string, timeout time.Duration, token string) (*Client, error) {
 		timeout = 20 * time.Second
 	}
 	return &Client{
-		endpoint: strings.TrimRight(parsed.String(), "/") + "/api/v1/analyze",
+		endpoint:   strings.TrimRight(parsed.String(), "/") + "/api/v1/analyze",
 		httpClient: &http.Client{Timeout: timeout},
-		token: token,
+		token:      token,
 	}, nil
 }
 
-// BuildRequest 只允许把单一证券、周期、复权口径、来源的已完成 K 线交给 CZSC。
+func normalizeSignalProfile(profile string) string {
+	profile = strings.TrimSpace(profile)
+	if profile == "" {
+		return SignalProfileStructureOnly
+	}
+	return profile
+}
+
+func expectedSignalProfileVersion(profile string) (string, bool) {
+	switch normalizeSignalProfile(profile) {
+	case SignalProfileStructureOnly:
+		return "structure-only-v1", true
+	case SignalProfileChan3BuyM60:
+		return "chan3buy-m60-v1", true
+	case SignalProfileChan3BuyM30:
+		return "chan3buy-m30-timing-v1", true
+	case SignalProfileTrendD1:
+		return "trend-breakout-d1-v1", true
+	default:
+		return "", false
+	}
+}
+
+func validateSignalProfile(profile, freq string) error {
+	switch normalizeSignalProfile(profile) {
+	case SignalProfileStructureOnly:
+		return nil
+	case SignalProfileChan3BuyM60:
+		if freq != "60分钟" {
+			return fmt.Errorf("signal_profile %q 只支持 60分钟", SignalProfileChan3BuyM60)
+		}
+	case SignalProfileChan3BuyM30:
+		if freq != "30分钟" {
+			return fmt.Errorf("signal_profile %q 只支持 30分钟", SignalProfileChan3BuyM30)
+		}
+	case SignalProfileTrendD1:
+		if freq != "日线" {
+			return fmt.Errorf("signal_profile %q 只支持 日线", SignalProfileTrendD1)
+		}
+	default:
+		return fmt.Errorf("不支持的 CZSC signal_profile: %q", profile)
+	}
+	return nil
+}
+
+// BuildRequest 保持旧调用兼容，默认只计算 CZSC 结构，不加载额外策略信号。
 func BuildRequest(bars []marketdata.Bar) (AnalyzeRequest, error) {
 	if err := marketdata.ValidateBatch(bars); err != nil {
 		return AnalyzeRequest{}, err
@@ -120,22 +179,40 @@ func BuildRequest(bars []marketdata.Bar) (AnalyzeRequest, error) {
 	}
 	request := AnalyzeRequest{
 		SchemaVersion: SchemaVersion,
-		TsCode: first.TsCode,
-		Freq: freq,
-		AdjustMode: string(first.AdjustMode),
-		Source: first.Source,
-		Bars: make([]BarDTO, 0, len(bars)),
+		TsCode:        first.TsCode,
+		Freq:          freq,
+		AdjustMode:    string(first.AdjustMode),
+		Source:        first.Source,
+		SignalProfile: SignalProfileStructureOnly,
+		Bars:          make([]BarDTO, 0, len(bars)),
 	}
 	for i, bar := range bars {
 		if !bar.IsComplete {
 			return AnalyzeRequest{}, fmt.Errorf("bars[%d] 尚未完成，不可进入正式分析", i)
 		}
 		request.Bars = append(request.Bars, BarDTO{
-			DT: bar.BarTime.Format(time.RFC3339),
+			DT:     bar.BarTime.Format(time.RFC3339),
 			Symbol: bar.TsCode,
-			Open: bar.Open, Close: bar.Close, High: bar.High, Low: bar.Low,
-			Vol: bar.Volume, Amount: bar.Amount,
+			Open:   bar.Open,
+			Close:  bar.Close,
+			High:   bar.High,
+			Low:    bar.Low,
+			Vol:    bar.Volume,
+			Amount: bar.Amount,
 		})
+	}
+	return request, nil
+}
+
+// BuildRequestWithProfile 在构建标准请求后选择一个服务端白名单信号配置。
+func BuildRequestWithProfile(bars []marketdata.Bar, signalProfile string) (AnalyzeRequest, error) {
+	request, err := BuildRequest(bars)
+	if err != nil {
+		return AnalyzeRequest{}, err
+	}
+	request.SignalProfile = normalizeSignalProfile(signalProfile)
+	if err := validateSignalProfile(request.SignalProfile, request.Freq); err != nil {
+		return AnalyzeRequest{}, err
 	}
 	return request, nil
 }
@@ -151,6 +228,9 @@ func validateAnalyzeRequest(request AnalyzeRequest) error {
 	case "日线", "30分钟", "60分钟":
 	default:
 		return fmt.Errorf("CZSC 周期无效: %q", request.Freq)
+	}
+	if err := validateSignalProfile(request.SignalProfile, request.Freq); err != nil {
+		return err
 	}
 	switch request.AdjustMode {
 	case string(marketdata.AdjustQFQ), string(marketdata.AdjustHFQ), string(marketdata.AdjustNone):
@@ -204,6 +284,45 @@ func finiteNonNegative(value float64) bool {
 	return value >= 0 && !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
+func validateAnalyzeResponse(request AnalyzeRequest, result AnalyzeResponse) error {
+	profile := normalizeSignalProfile(request.SignalProfile)
+	profileVersion, ok := expectedSignalProfileVersion(profile)
+	if !ok {
+		return fmt.Errorf("不支持的 CZSC signal_profile: %q", profile)
+	}
+	lastBar := request.Bars[len(request.Bars)-1]
+	if result.SchemaVersion != request.SchemaVersion ||
+		result.TsCode != request.TsCode ||
+		result.Freq != request.Freq ||
+		result.AdjustMode != request.AdjustMode ||
+		result.Source != request.Source ||
+		result.InputBarCount != len(request.Bars) ||
+		result.AsOf != lastBar.DT {
+		return fmt.Errorf("CZSC 响应与请求的 schema/证券/周期/复权/来源/数据范围不匹配")
+	}
+	if result.SignalProfile != profile ||
+		result.SignalProfileVersion != profileVersion ||
+		result.CZSCSourceRevision != CZSCSourceRevision {
+		return fmt.Errorf("CZSC 响应的信号 profile 或源码版本与请求契约不匹配")
+	}
+	switch result.SignalDataStatus {
+	case "READY", "INSUFFICIENT_DATA":
+		if profile == SignalProfileStructureOnly {
+			return fmt.Errorf("structure_only 响应的 signal_data_status 必须为 NOT_REQUESTED")
+		}
+	case "NOT_REQUESTED":
+		if profile != SignalProfileStructureOnly {
+			return fmt.Errorf("策略信号 profile 响应不能标记为 NOT_REQUESTED")
+		}
+	default:
+		return fmt.Errorf("CZSC 响应的 signal_data_status 无效: %q", result.SignalDataStatus)
+	}
+	if result.Signals == nil {
+		result.Signals = map[string]string{}
+	}
+	return nil
+}
+
 func (c *Client) Analyze(ctx context.Context, request AnalyzeRequest) (AnalyzeResponse, error) {
 	var result AnalyzeResponse
 	if err := validateAnalyzeRequest(request); err != nil {
@@ -241,15 +360,11 @@ func (c *Client) Analyze(ctx context.Context, request AnalyzeRequest) (AnalyzeRe
 	if err := json.Unmarshal(responseBody, &result); err != nil {
 		return result, fmt.Errorf("解析 CZSC 响应失败: %w", err)
 	}
-	lastBar := request.Bars[len(request.Bars)-1]
-	if result.SchemaVersion != request.SchemaVersion ||
-		result.TsCode != request.TsCode ||
-		result.Freq != request.Freq ||
-		result.AdjustMode != request.AdjustMode ||
-		result.Source != request.Source ||
-		result.InputBarCount != len(request.Bars) ||
-		result.AsOf != lastBar.DT {
-		return result, fmt.Errorf("CZSC 响应与请求的 schema/证券/周期/复权/来源/数据范围不匹配")
+	if err := validateAnalyzeResponse(request, result); err != nil {
+		return result, err
+	}
+	if result.Signals == nil {
+		result.Signals = map[string]string{}
 	}
 	return result, nil
 }

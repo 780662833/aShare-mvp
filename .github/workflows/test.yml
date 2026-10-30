@@ -21,13 +21,20 @@ jobs:
       - run: go test ./...
 
   czsc-contract:
-    name: CZSC contract tests
+    name: CZSC contract and native signal tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Run contract tests
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned native CZSC
+        working-directory: czsc-service
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Run contract and native signal tests
         working-directory: czsc-service
         run: python -m unittest discover -s czsc_service -p "test_*.py"
