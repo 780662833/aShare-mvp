@@ -30,7 +30,7 @@ func (f *fakeClient) StockKLine(uint16, uint8, string, uint16, uint16, uint16, u
 	return f.bars, f.barsErr
 }
 
-func (f *fakeClient) Disconnect() {}
+func (f *fakeClient) Disconnect() error { return nil }
 
 func TestFetchUniverseReportsPerMarketCompleteness(t *testing.T) {
 	client := &fakeClient{
@@ -134,23 +134,6 @@ func TestFrequencyMappingAndCodeParsing(t *testing.T) {
 
 func TestNormalizeBarTimeRejectsUnknownIntradayBoundary(t *testing.T) {
 	// 09:30 是当日第一个 30 分钟交易区间的起点，不是统一模型约定的结束时间。
-	item := proto.SecurityBar{Year: 2026, Month: 10, Day: 30, Hour: 9, Minute: 30}
-	if _, err := normalizeBarTime(item, marketdata.FrequencyM30); err == nil {
-		t.Fatal("未核实为 K 线结束时间的分钟标签必须被拒绝")
-	}
-	item.Hour, item.Minute = 10, 0
-	if _, err := normalizeBarTime(item, marketdata.FrequencyM30); err != nil {
-		t.Fatalf("合法 30 分钟结束边界被拒绝: %v", err)
-	}
-	item.Hour, item.Minute = 10, 0
-	if _, err := normalizeBarTime(item, marketdata.FrequencyM60); err == nil {
-		t.Fatal("10:00 不是本项目定义的 60 分钟 K 线结束边界")
-	}
-}
-
-
-func TestNormalizeBarTimeRejectsUnknownIntradayBoundary(t *testing.T) {
-	// 09:30 是第一个 30 分钟交易区间的起点，不是本项目约定的结束时间。
 	item := proto.SecurityBar{Year: 2026, Month: 10, Day: 30, Hour: 9, Minute: 30}
 	if _, err := normalizeBarTime(item, marketdata.FrequencyM30); err == nil {
 		t.Fatal("未核实为 K 线结束时间的分钟标签必须被拒绝")
