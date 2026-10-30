@@ -79,6 +79,7 @@ func chanInput() contract.StrategyInput {
 					helper319Key: "三买_均线新高_任意_0",
 				},
 				BICount: 12,
+				SignalAgeBars: intPtr(0),
 				RecentBI: []contract.BISummary{
 					{StartTime: "2026-10-30T08:00:00+08:00", EndTime: "2026-10-30T09:00:00+08:00", Direction: "Up", High: 10.5, Low: 9.0},
 					{StartTime: "2026-10-30T09:00:00+08:00", EndTime: "2026-10-30T10:00:00+08:00", Direction: "Down", High: 10.2, Low: 9.2},
@@ -229,6 +230,26 @@ func TestEvaluateExpiresWhenUpstreamAgeExceedsConfiguration(t *testing.T) {
 		t.Fatalf("超过配置有效 K 线数量应过期，得到 %s", decision.Status)
 	}
 }
+
+func TestEvaluateWaitsWhenSignalAgeIsUnknown(t *testing.T) {
+	strategy, err := New(chanConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := chanInput()
+	m60 := input.Technical[marketdata.FrequencyM60]
+	m60.SignalAgeBars = nil
+	input.Technical[marketdata.FrequencyM60] = m60
+	decision, err := strategy.Evaluate(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Status != contract.StatusWaitEntry || !hasReason(decision, "THIRD_BUY_SIGNAL_AGE_UNKNOWN") {
+		t.Fatalf("信号年龄未知时必须等待: %+v", decision)
+	}
+}
+
+func intPtr(value int) *int { return &value }
 
 func hasReason(decision contract.StrategyDecision, code string) bool {
 	for _, reason := range decision.ReasonCodes {
