@@ -328,6 +328,18 @@ func ValidateTechnicalSnapshot(
 	return uniqueStrings(issues)
 }
 
+// ResolveSignalLifecycle 优先读取按信号 key 计算的生命周期；旧 scalar 仅为测试迁移兼容。
+func ResolveSignalLifecycle(snapshot FrequencyAnalysis, signalKey string) (SignalLifecycle, bool) {
+	if lifecycle, ok := snapshot.SignalLifecycles[signalKey]; ok &&
+		lifecycle.AgeBars >= 0 && !lifecycle.StartedAt.IsZero() {
+		return lifecycle, true
+	}
+	if snapshot.SignalAgeBars != nil && *snapshot.SignalAgeBars >= 0 {
+		return SignalLifecycle{AgeBars: *snapshot.SignalAgeBars, StartedAt: snapshot.AsOf}, true
+	}
+	return SignalLifecycle{}, false
+}
+
 func AppendReason(decision *StrategyDecision, code string) {
 	if decision == nil || strings.TrimSpace(code) == "" {
 		return
