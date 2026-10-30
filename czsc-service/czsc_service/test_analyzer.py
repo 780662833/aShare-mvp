@@ -1,7 +1,12 @@
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
-from czsc_service.analyzer import _czsc_wall_time, _market_iso, validate_payload
+from czsc_service.analyzer import (
+    SIGNAL_PROFILES,
+    _czsc_wall_time,
+    _market_iso,
+    validate_payload,
+)
 
 
 def sample_payload():
@@ -25,11 +30,14 @@ def sample_payload():
 
 
 class ValidatePayloadTests(unittest.TestCase):
-    def test_accepts_standard_bar_payload(self):
+    def test_accepts_standard_bar_payload_and_defaults_to_structure_only(self):
         result = validate_payload(sample_payload())
         self.assertEqual(result["freq_native"], "F30")
         self.assertEqual(len(result["bars"]), 1)
         self.assertEqual(result["bars"][0]["czsc_dt"].isoformat(), "2026-10-30T09:30:00")
+        self.assertEqual(result["signal_profile"], "structure_only")
+        self.assertEqual(result["signal_profile_version"], "structure-only-v1")
+        self.assertEqual(result["signals_config"], [])
 
     def test_wall_time_conversion_does_not_shift_eight_hours(self):
         result = validate_payload(sample_payload())
@@ -64,11 +72,48 @@ class ValidatePayloadTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_payload(payload)
 
-
     def test_market_iso_rejects_non_shanghai_aware_datetime(self):
         wrong = datetime(2026, 10, 30, 1, 30, tzinfo=timezone.utc)
         with self.assertRaises(ValueError):
             _market_iso(wrong)
+
+    def test_accepts_m30_timing_profile_and_uses_allowlisted_config(self):
+        payload = sample_payload()
+        payload["signal_profile"] = "chan3buy_m30_timing_v1"
+        result = validate_payload(payload)
+        self.assertEqual(result["signal_profile_version"], "chan3buy-m30-timing-v1")
+        self.assertEqual(
+            [item["name"] for item in result["signals_config"]],
+            ["cxt_bi_status_V230102"],
+        )
+
+    def test_rejects_unknown_profile(self):
+        payload = sample_payload()
+        payload["signal_profile"] = "run_any_function"
+        with self.assertRaisesRegex(ValueError, "不支持的 signal_profile"):
+            validate_payload(payload)
+
+    def test_rejects_profile_frequency_mismatch(self):
+        payload = sample_payload()
+        payload["signal_profile"] = "chan3buy_m60_v1"
+        with self.assertRaisesRegex(ValueError, "只支持 60分钟"):
+            validate_payload(payload)
+
+    def test_trend_profile_window_and_indicator_configuration_is_pinned(self):
+        spec = SIGNAL_PROFILES["trend_breakout_d1_v1"]
+        self.assertEqual(spec["version"], "trend-breakout-d1-v1")
+        self.assertEqual(
+            [item["w"] for item in spec["signals"] if item["name"] == "bar_break_V240428"],
+            [21, 31, 56],
+        )
+        self.assertEqual(
+            [
+                item["timeperiod"]
+                for item in spec["signals"]
+                if item["name"] == "tas_ma_base_V221101"
+            ],
+            [20, 60],
+        )
 
 
 if __name__ == "__main__":
