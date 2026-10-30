@@ -151,6 +151,28 @@ func TestEvaluateDoesNotUseMainSignalAloneAsBuyObservation(t *testing.T) {
 	}
 }
 
+func TestEvaluateRejectsM30TimingBeforeM60MainSignal(t *testing.T) {
+	strategy, err := New(chanConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := chanInput()
+	m30 := input.Technical[marketdata.FrequencyM30]
+	m30.AsOf = input.Technical[marketdata.FrequencyM60].AsOf
+	input.Technical[marketdata.FrequencyM30] = m30
+	bars := input.Bars[marketdata.FrequencyM30]
+	bars[len(bars)-1].BarTime = m30.AsOf
+	input.Bars[marketdata.FrequencyM30] = bars
+
+	decision, err := strategy.Evaluate(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Status != contract.StatusWaitEntry || !hasReason(decision, "M30_NOT_AFTER_M60_CONFIRMATION") {
+		t.Fatalf("M30 时机不得早于 M60 主信号: %+v", decision)
+	}
+}
+
 func TestEvaluateWaitsWhenM30TimingNotReady(t *testing.T) {
 	strategy, err := New(chanConfig())
 	if err != nil {
