@@ -124,35 +124,18 @@ func (s *Service) EvaluateSymbol(ctx context.Context, tsCode string, asOf time.T
 	}
 	issues := make([]string, 0)
 	asOfDate := asOf.Format("2006-01-02")
-	tradeDay, calErr := s.repo.GetTradeDay(ctx, calendar.Exchange(security.Exchange), asOfDate)
-	if calErr != nil {
-		issues = append(issues, "AS_OF_TRADING_CALENDAR_UNKNOWN")
-	}
-	latestOpen, openErr := s.repo.GetLatestOpenTradeDay(ctx, calendar.Exchange(security.Exchange), asOfDate)
-	if openErr != nil {
-		issues = append(issues, "LATEST_OPEN_TRADE_DAY_UNKNOWN")
-	}
+	expectedTimes, stateDate, calendarIssues := expectedBarTimes(
+		ctx, s.repo, calendar.Exchange(security.Exchange), asOf,
+	)
+	issues = append(issues, calendarIssues...)
 
-	var expectedBarTime time.Time
-	if openErr == nil {
-		day, parseErr := time.ParseInLocation("2006-01-02", latestOpen.CalDate, marketdata.ShanghaiLocation())
-		if parseErr != nil {
-			issues = append(issues, "LATEST_OPEN_TRADE_DAY_INVALID")
-		} else {
-			expectedBarTime = time.Date(day.Year(), day.Month(), day.Day(), 15, 0, 0, 0, marketdata.ShanghaiLocation())
-			if calErr == nil && tradeDay.IsOpen && asOf.Before(expectedBarTime.Add(time.Minute)) {
-				issues = append(issues, "EVALUATION_BEFORE_MARKET_CLOSE")
-			}
-		}
-	}
-
-	if openErr == nil {
-		state, stateErr := s.repo.GetSecurityDailyState(ctx, tsCode, latestOpen.CalDate)
+	if stateDate != "" {
+		state, stateErr := s.repo.GetSecurityDailyState(ctx, tsCode, stateDate)
 		if stateErr != nil {
 			issues = append(issues, "SECURITY_DAILY_STATE_MISSING")
 		} else {
 			input.DailyState = state
-			if state.TradeDate != latestOpen.CalDate {
+			if state.TradeDate != stateDate {
 				issues = append(issues, "SECURITY_DAILY_STATE_STALE")
 			}
 			if state.FetchedAt.After(asOf) {
@@ -182,7 +165,9 @@ func (s *Service) EvaluateSymbol(ctx context.Context, tsCode string, asOf time.T
 		if len(bars) < s.config.HistoryBars {
 			// A shorter warm-up window is allowed; strategy-level feature checks decide if it is sufficient.
 		}
+		expectedBarTime := expectedTimes[frequency]
 		if expectedBarTime.IsZero() {
+			issues = append(issues, "EXPECTED_BAR_TIME_"+string(frequency)+"_UNKNOWN")
 			continue
 		}
 		latest := bars[len(bars)-1]
@@ -358,4 +343,102 @@ func (s *Service) saveAnalysisError(ctx context.Context, result Result, input co
 	}
 	result.Decisions = decisions
 	return result, nil
+}
+
+func expectedBarTimes(
+	ctx context.Context,
+	repo Repository,
+	exchange calendar.Exchange,
+	asOf time.Time,
+) (map[marketdata.Frequency]time.Time, string, []string) {
+	expected := make(map[marketdata.Frequency]time.Time, 3)
+	issues := make([]string, 0)
+	date := asOf.Format("2006-01-02")
+	day, err := repo.GetTradeDay(ctx, exchange, date)
+	if err != nil {
+		return expected, "", []string{"AS_OF_TRADING_CALENDAR_UNKNOWN"}
+	}
+
+	var stateDate string
+	var latestOpen calendar.TradeDay
+	if day.IsOpen {
+		stateDate = date
+		latestOpen, err = repo.GetLatestOpenTradeDay(ctx, exchange, date)
+		if err != nil || latestOpen.CalDate != date {
+			issues = append(issues, "LATEST_OPEN_TRADE_DAY_UNKNOWN")
+		}
+	} else {
+		latestOpen, err = repo.GetLatestOpenTradeDay(ctx, exchange, date)
+		if err != nil {
+			issues = append(issues, "LATEST_OPEN_TRADE_DAY_UNKNOWN")
+			return expected, "", issues
+		}
+		stateDate = latestOpen.CalDate
+	}
+
+	if !day.IsOpen {
+		fallback, parseErr := closeTime(latestOpen.CalDate)
+		if parseErr != nil {
+			issues = append(issues, "LATEST_OPEN_TRADE_DAY_INVALID")
+			return expected, stateDate, issues
+		}
+		for _, frequency := range []marketdata.Frequency{marketdata.FrequencyD1, marketdata.FrequencyM60, marketdata.FrequencyM30} {
+			expected[frequency] = fallback
+		}
+		return expected, stateDate, issues
+	}
+
+	priorDate := asOf.AddDate(0, 0, -1).Format("2006-01-02")
+	priorOpen, priorErr := repo.GetLatestOpenTradeDay(ctx, exchange, priorDate)
+	var priorClose time.Time
+	if priorErr == nil {
+		priorClose, err = closeTime(priorOpen.CalDate)
+		if err != nil {
+			issues = append(issues, "PREVIOUS_TRADE_DAY_INVALID")
+		}
+	} else {
+		issues = append(issues, "PREVIOUS_TRADE_DAY_UNKNOWN")
+	}
+
+	dailyClose, _ := closeTime(date)
+	if !asOf.Before(dailyClose.Add(time.Minute)) {
+		expected[marketdata.FrequencyD1] = dailyClose
+	} else {
+		expected[marketdata.FrequencyD1] = priorClose
+	}
+	for _, frequency := range []marketdata.Frequency{marketdata.FrequencyM60, marketdata.FrequencyM30} {
+		expected[frequency] = latestIntradayClose(frequency, date, asOf)
+		if expected[frequency].IsZero() {
+			expected[frequency] = priorClose
+		}
+	}
+	return expected, stateDate, issues
+}
+
+func closeTime(date string) (time.Time, error) {
+	day, err := time.ParseInLocation("2006-01-02", date, marketdata.ShanghaiLocation())
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.Date(day.Year(), day.Month(), day.Day(), 15, 0, 0, 0, marketdata.ShanghaiLocation()), nil
+}
+
+func latestIntradayClose(frequency marketdata.Frequency, date string, asOf time.Time) time.Time {
+	slots := []string{}
+	switch frequency {
+	case marketdata.FrequencyM30:
+		slots = []string{"10:00", "10:30", "11:00", "11:30", "13:30", "14:00", "14:30", "15:00"}
+	case marketdata.FrequencyM60:
+		slots = []string{"10:30", "11:30", "14:00", "15:00"}
+	default:
+		return time.Time{}
+	}
+	var latest time.Time
+	for _, slot := range slots {
+		candidate, err := time.ParseInLocation("2006-01-02 15:04", date+" "+slot, marketdata.ShanghaiLocation())
+		if err == nil && !asOf.Before(candidate.Add(time.Minute)) {
+			latest = candidate
+		}
+	}
+	return latest
 }
