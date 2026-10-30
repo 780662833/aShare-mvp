@@ -9,7 +9,8 @@ CREATE TABLE IF NOT EXISTS strategy_decisions (
     status            TEXT NOT NULL,
     data_version      TEXT NOT NULL,
     payload           TEXT NOT NULL,
-    saved_at          TEXT NOT NULL
+    saved_at          TEXT NOT NULL,
+    FOREIGN KEY (ts_code) REFERENCES stock_basic(ts_code) ON UPDATE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_strategy_decisions_latest
