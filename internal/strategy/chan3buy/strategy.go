@@ -296,6 +296,9 @@ func (s *Strategy) Evaluate(ctx context.Context, input contract.StrategyInput) (
 		return wait(decision, "MARKET_ENVIRONMENT_NEUTRAL", "市场环境中性，当前配置要求等待更明确的市场条件"), nil
 	}
 
+	if !m30.AsOf.After(m60.AsOf) {
+		return wait(decision, "M30_NOT_AFTER_M60_CONFIRMATION", "30 分钟择时确认必须晚于 60 分钟主三买确认"), nil
+	}
 	m30Parts := signalParts(m30.Signals[m30TimingKey])
 	if !isShortCycleTurnUp(m30Parts) {
 		return wait(decision, "M30_TURN_UP_NOT_CONFIRMED", "30 分钟尚未出现预定义的底分确认或向上笔延续证据"), nil
