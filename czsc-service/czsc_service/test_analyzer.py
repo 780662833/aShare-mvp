@@ -67,3 +67,9 @@ class ValidatePayloadTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+    def test_market_iso_rejects_non_shanghai_aware_datetime(self):
+        wrong = datetime(2026, 10, 30, 1, 30, tzinfo=timezone.utc)
+        with self.assertRaises(ValueError):
+            _market_iso(wrong)
