@@ -220,3 +220,73 @@ func TestValidateAnalyzeRequestRejectsProfileFrequencyMismatch(t *testing.T) {
 		t.Fatal("趋势突破日线 profile 不应接受 30 分钟请求")
 	}
 }
+
+
+func TestAnalyzePreservesAndValidatesPerSignalLifecycle(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input AnalyzeRequest
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			t.Fatal(err)
+		}
+		response := responseForRequest(input)
+		key := "30分钟_D1_表里关系V230102"
+		response.Signals[key] = "向上_底分_任意_0"
+		response.SignalLifecycles = map[string]SignalLifecycle{
+			key: {AgeBars: 2, StartedAt: "2026-10-30T10:00:00+08:00"},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, time.Second, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := marketdata.ShanghaiWallTime(2026, 10, 30, 11, 0)
+	bar := completeBar(at)
+	request, err := BuildRequestWithProfile([]marketdata.Bar{bar}, SignalProfileChan3BuyM30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Analyze(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lifecycle := response.SignalLifecycles["30分钟_D1_表里关系V230102"]
+	if lifecycle.AgeBars != 2 || lifecycle.StartedAt != "2026-10-30T10:00:00+08:00" {
+		t.Fatalf("信号生命周期未正确透传: %+v", lifecycle)
+	}
+}
+
+func TestValidateAnalyzeResponseRejectsLifecycleForUnknownSignal(t *testing.T) {
+	at := marketdata.ShanghaiWallTime(2026, 10, 30, 11, 0)
+	request, err := BuildRequestWithProfile([]marketdata.Bar{completeBar(at)}, SignalProfileChan3BuyM30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := responseForRequest(request)
+	response.SignalLifecycles = map[string]SignalLifecycle{
+		"unexpected_signal": {AgeBars: 0, StartedAt: "2026-10-30T11:00:00+08:00"},
+	}
+	if err := validateAnalyzeResponse(request, response); err == nil {
+		t.Fatal("不存在于 signals 的生命周期 key 必须被拒绝")
+	}
+}
+
+func TestValidateAnalyzeResponseRejectsFutureLifecycleStart(t *testing.T) {
+	at := marketdata.ShanghaiWallTime(2026, 10, 30, 11, 0)
+	request, err := BuildRequestWithProfile([]marketdata.Bar{completeBar(at)}, SignalProfileChan3BuyM30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := "30分钟_D1_表里关系V230102"
+	response := responseForRequest(request)
+	response.Signals[key] = "向上_底分_任意_0"
+	response.SignalLifecycles = map[string]SignalLifecycle{
+		key: {AgeBars: 0, StartedAt: "2026-10-30T11:30:00+08:00"},
+	}
+	if err := validateAnalyzeResponse(request, response); err == nil {
+		t.Fatal("生命周期起始时间不能晚于 as_of")
+	}
+}
