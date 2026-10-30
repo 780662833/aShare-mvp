@@ -1,0 +1,20 @@
+# Local data and credentials
+/data/
+/*.db
+/*.db-shm
+/*.db-wal
+.env
+.env.*
+!.env.example
+
+# Go
+/bin/
+/dist/
+*.test
+coverage.out
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
