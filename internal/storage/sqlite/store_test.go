@@ -132,7 +132,13 @@ func TestUpsertTradeCalendarHonorsSourcePriority(t *testing.T) {
 		t.Fatalf("低优先级来源覆盖了交易所公告: is_open=%d source=%q", isOpen, source)
 	}
 
-	manual := lowerPriority
+	// 人工覆盖高于 Tushare，但低于交易所公告。
+	tushareOnly := lowerPriority
+	tushareOnly.CalDate = "2026-10-29"
+	if err := store.UpsertTradeCalendar(ctx, []calendar.TradeDay{tushareOnly}); err != nil {
+		t.Fatal(err)
+	}
+	manual := tushareOnly
 	manual.IsOpen = false
 	manual.Source = calendar.SourceManualOverride
 	if err := store.UpsertTradeCalendar(ctx, []calendar.TradeDay{manual}); err != nil {
@@ -140,12 +146,12 @@ func TestUpsertTradeCalendarHonorsSourcePriority(t *testing.T) {
 	}
 	if err := store.DB().QueryRowContext(ctx,
 		"SELECT is_open, source FROM trade_calendar WHERE exchange = ? AND cal_date = ?",
-		string(calendar.SSE), "2026-10-30",
+		string(calendar.SSE), "2026-10-29",
 	).Scan(&isOpen, &source); err != nil {
 		t.Fatal(err)
 	}
 	if isOpen != 0 || source != string(calendar.SourceManualOverride) {
-		t.Fatalf("人工覆盖未生效: is_open=%d source=%q", isOpen, source)
+		t.Fatalf("人工覆盖未能覆盖 Tushare: is_open=%d source=%q", isOpen, source)
 	}
 }
 
