@@ -312,7 +312,7 @@ func (s *Strategy) Evaluate(ctx context.Context, input contract.StrategyInput) (
 		},
 	)
 
-	m60Bars := input.Bars[marketdata.FrequencyM60]
+	m60Bars := barsAfter(input.Bars[marketdata.FrequencyM60], latestDaily.BarTime)
 	if consecutiveClosesBelow(m60Bars, rangeHigh, s.config.M60FailureConfirmBars) {
 		decision.Status = contract.StatusReduceObservation
 		contract.AppendReason(&decision, "M60_BREAKOUT_FAILURE_RISK")
@@ -340,11 +340,15 @@ func (s *Strategy) Evaluate(ctx context.Context, input contract.StrategyInput) (
 		Confidence: contract.GradeMedium,
 	})
 
+	m30Bars := input.Bars[marketdata.FrequencyM30]
+	if len(m60Bars) == 0 || len(m30Bars) == 0 ||
+		!m30Bars[len(m30Bars)-1].BarTime.After(m60Bars[len(m60Bars)-1].BarTime) {
+		return wait(decision, "M30_NOT_AFTER_M60_CONFIRMATION", "30 分钟择时 K 线必须晚于日线突破后的 60 分钟确认 K 线"), nil
+	}
 	m30Parts := signalParts(m30.Signals[m30TimingKey])
 	if !isShortCycleTurnUp(m30Parts) {
 		return wait(decision, "M30_ENTRY_TIMING_NOT_CONFIRMED", "30 分钟尚未出现预定义的底分确认或向上笔延续证据"), nil
 	}
-	m30Bars := input.Bars[marketdata.FrequencyM30]
 	currentPrice := m30Bars[len(m30Bars)-1].Close
 	distancePct, err := feature.PercentAbove(currentPrice, rangeHigh)
 	if err != nil {
@@ -427,6 +431,16 @@ func isShortCycleTurnUp(parts []string) bool {
 	}
 	return (parts[0] == "向下" && parts[1] == "底分") ||
 		(parts[0] == "向上" && parts[1] == "延伸")
+}
+
+func barsAfter(bars []marketdata.Bar, after time.Time) []marketdata.Bar {
+	result := make([]marketdata.Bar, 0, len(bars))
+	for _, bar := range bars {
+		if bar.BarTime.After(after) {
+			result = append(result, bar)
+		}
+	}
+	return result
 }
 
 func consecutiveClosesAbove(bars []marketdata.Bar, level float64, required int) bool {
