@@ -99,6 +99,14 @@ func (s *Strategy) Evaluate(ctx context.Context, input contract.StrategyInput) (
 	}
 	contract.AppendProfile(&decision, marketdata.FrequencyM60, m60)
 	contract.AppendProfile(&decision, marketdata.FrequencyM30, m30)
+	for _, key := range []string{mainSignalKey, helper318Key, helper319Key} {
+		if _, ok := m60.Signals[key]; !ok {
+			return dataIncomplete(decision, []string{"TECHNICAL_M60_REQUIRED_SIGNAL_MISSING"}), nil
+		}
+	}
+	if _, ok := m30.Signals[m30TimingKey]; !ok {
+		return dataIncomplete(decision, []string{"TECHNICAL_M30_REQUIRED_SIGNAL_MISSING"}), nil
+	}
 
 	dailyTrend, err := feature.ClassifyDailyTrend(
 		input.Bars[marketdata.FrequencyD1],
@@ -275,13 +283,13 @@ func (s *Strategy) Evaluate(ctx context.Context, input contract.StrategyInput) (
 	if dailyTrend.State == feature.TrendUnfavorable {
 		return wait(decision, "DAILY_TREND_UNFAVORABLE", "日线环境明确不利，三买结构保留但不升级为买入观察"), nil
 	}
-	if input.MarketContext.Status == contract.MarketUnfavorable {
+	if decision.MarketStatus == contract.MarketUnfavorable {
 		return wait(decision, "MARKET_ENVIRONMENT_UNFAVORABLE", "市场环境明确不利，三买结构保留但不升级为买入观察"), nil
 	}
-	if input.MarketContext.Status == contract.MarketUnknown && !s.config.AllowUnknownMarket {
+	if decision.MarketStatus == contract.MarketUnknown && !s.config.AllowUnknownMarket {
 		return wait(decision, "MARKET_ENVIRONMENT_UNKNOWN", "市场环境未知，当前配置不允许在缺少市场证据时升级"), nil
 	}
-	if input.MarketContext.Status == contract.MarketNeutral && !s.config.AllowNeutralMarket {
+	if decision.MarketStatus == contract.MarketNeutral && !s.config.AllowNeutralMarket {
 		return wait(decision, "MARKET_ENVIRONMENT_NEUTRAL", "市场环境中性，当前配置要求等待更明确的市场条件"), nil
 	}
 
