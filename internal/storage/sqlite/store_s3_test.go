@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/780662833/aShare-mvp/internal/market/universe"
 	"github.com/780662833/aShare-mvp/internal/marketdata"
 	"github.com/780662833/aShare-mvp/internal/strategy/contract"
 )
@@ -25,7 +26,7 @@ func TestListRecentBarsAppliesAsOfCompletionAndLimit(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	fetchedAt := marketdata.ShanghaiWallTime(2026, 10, 30, 16, 0)
+	fetchedAt := marketdata.ShanghaiWallTime(2026, 10, 30, 10, 40)
 	bars := make([]marketdata.Bar, 0, 4)
 	for i, minute := range []int{10, 30, 60, 90} {
 		bar := marketdata.Bar{
