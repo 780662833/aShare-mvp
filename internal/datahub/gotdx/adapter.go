@@ -228,7 +228,28 @@ func normalizeBarTime(item proto.SecurityBar, freq marketdata.Frequency) (time.T
 	if result.Year() != item.Year || int(result.Month()) != item.Month || result.Day() != item.Day {
 		return time.Time{}, fmt.Errorf("日期字段无效")
 	}
+	if !validBarEndTime(freq, hour, minute) {
+		return time.Time{}, fmt.Errorf("gotdx 时间 %02d:%02d 不是 %s 的已知 K 线结束边界", hour, minute, freq)
+	}
 	return result, nil
+}
+
+func validBarEndTime(freq marketdata.Frequency, hour, minute int) bool {
+	switch freq {
+	case marketdata.FrequencyD1:
+		return hour == 15 && minute == 0
+	case marketdata.FrequencyM30:
+		switch fmt.Sprintf("%02d:%02d", hour, minute) {
+		case "10:00", "10:30", "11:00", "11:30", "13:30", "14:00", "14:30", "15:00":
+			return true
+		}
+	case marketdata.FrequencyM60:
+		switch fmt.Sprintf("%02d:%02d", hour, minute) {
+		case "10:30", "11:30", "14:00", "15:00":
+			return true
+		}
+	}
+	return false
 }
 
 func categoryForFrequency(freq marketdata.Frequency) (uint16, error) {
