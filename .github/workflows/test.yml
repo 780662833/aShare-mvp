@@ -21,6 +21,12 @@ jobs:
       # The initial repository did not contain go.sum. Resolve and write the
       # module checksums before executing the test suite.
       - run: go mod tidy
+      - uses: actions/upload-artifact@v4
+        with:
+          name: go-module-lock
+          path: go.sum
+          if-no-files-found: error
+          retention-days: 1
       - run: go test ./...
 
   czsc-contract:
