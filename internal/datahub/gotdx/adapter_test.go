@@ -96,7 +96,7 @@ func TestFetchBarsRebuildsShanghaiWallTimeAndMarksFormingBar(t *testing.T) {
 		t.Fatal(err)
 	}
 	adapter.now = func() time.Time {
-		return time.Date(2026, 10, 30, 10, 31, 30, 0, marketdata.ShanghaiLocation())
+		return time.Date(2026, 10, 30, 10, 30, 30, 0, marketdata.ShanghaiLocation())
 	}
 	got, err := adapter.FetchBars(context.Background(), "600519.SH", marketdata.FrequencyM30, 250)
 	if err != nil {

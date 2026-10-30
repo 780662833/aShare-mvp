@@ -30,7 +30,6 @@ func (f Frequency) Valid() bool {
 	}
 }
 
-// CZSCName 返回 CZSC 可识别的中文周期，不自行定义 CZSC 的频率枚举。
 func (f Frequency) CZSCName() (string, error) {
 	switch f {
 	case FrequencyD1:
@@ -65,26 +64,26 @@ const (
 // BarTime 永远表示 K 线结束时间，且必须显式处于 UTC+08:00。
 // 成交量在量纲确认前允许 SOURCE_NATIVE / UNKNOWN，不伪装成股数。
 type Bar struct {
-	TsCode       string     `json:"ts_code"`
-	Frequency    Frequency  `json:"freq"`
-	BarTime      time.Time  `json:"bar_time"`
-	Open         float64    `json:"open"`
-	High         float64    `json:"high"`
-	Low          float64    `json:"low"`
-	Close        float64    `json:"close"`
-	Volume       float64    `json:"volume"`
-	Amount       float64    `json:"amount"`
-	AdjustMode   AdjustMode `json:"adjust_mode"`
-	VolumeUnit   VolumeUnit `json:"volume_unit"`
-	Source       string     `json:"source"`
-	IsComplete   bool       `json:"is_complete"`
-	FetchedAt    time.Time  `json:"fetched_at"`
+	TsCode     string     `json:"ts_code"`
+	Frequency  Frequency  `json:"freq"`
+	BarTime    time.Time  `json:"bar_time"`
+	Open       float64    `json:"open"`
+	High       float64    `json:"high"`
+	Low        float64    `json:"low"`
+	Close      float64    `json:"close"`
+	Volume     float64    `json:"volume"`
+	Amount     float64    `json:"amount"`
+	AdjustMode AdjustMode `json:"adjust_mode"`
+	VolumeUnit VolumeUnit `json:"volume_unit"`
+	Source     string     `json:"source"`
+	IsComplete bool       `json:"is_complete"`
+	FetchedAt  time.Time  `json:"fetched_at"`
 }
 
 func ShanghaiLocation() *time.Location { return shanghaiLocation }
 
 // ShanghaiWallTime 使用日期/时分字段重建交易所墙上时间。
-// 特别用于 gotdx：其 DateTime 目前由 time.Local 构造，不能简单调用 .In() 修正。
+// gotdx 的 DateTime 目前由 time.Local 构造，不能简单调用 .In() 修正。
 func ShanghaiWallTime(year int, month time.Month, day, hour, minute int) time.Time {
 	return time.Date(year, month, day, hour, minute, 0, 0, shanghaiLocation)
 }
@@ -131,7 +130,8 @@ func (b Bar) Validate() error {
 	return nil
 }
 
-// ValidateBatch 校验单次写入必须属于同一证券、周期、复权口径，且时间严格递增。
+// ValidateBatch 校验单次写入必须属于同一证券、周期、复权、来源和成交量量纲，且时间严格递增。
+// 不主动排序或混合多数据源；来源变化应先做重叠区间核对。
 func ValidateBatch(bars []Bar) error {
 	if len(bars) == 0 {
 		return errors.New("K 线批次不能为空")
@@ -146,8 +146,10 @@ func ValidateBatch(bars []Bar) error {
 		if err := bar.Validate(); err != nil {
 			return fmt.Errorf("bars[%d]: %w", i, err)
 		}
-		if bar.TsCode != first.TsCode || bar.Frequency != first.Frequency || bar.AdjustMode != first.AdjustMode {
-			return fmt.Errorf("bars[%d] 与批次首根证券/周期/复权口径不一致", i)
+		if bar.TsCode != first.TsCode || bar.Frequency != first.Frequency ||
+			bar.AdjustMode != first.AdjustMode || bar.Source != first.Source ||
+			bar.VolumeUnit != first.VolumeUnit {
+			return fmt.Errorf("bars[%d] 与批次首根证券/周期/复权/来源/成交量量纲不一致", i)
 		}
 		if !bar.BarTime.After(prev) {
 			return fmt.Errorf("bars[%d] 时间重复或乱序", i)

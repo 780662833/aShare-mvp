@@ -17,8 +17,8 @@
 |---|---|---|
 | 01 | D1/D2 领域契约、SQLite 基础表与仓储 | 已生成 |
 | 02 | gotdx 证券名单、日线/30m/60m 接入适配 | 已生成 |
-| 03 | CZSC HTTP/JSON 客户端与独立分析服务 | 下一段 |
-| 04 | 两套策略规则与状态跟踪 | 待生成 |
+| 03 | CZSC HTTP/JSON 客户端与独立分析服务 | 已生成，待运行环境验收 |
+| 04 | 两套策略规则与状态跟踪 | 下一段 |
 | 05 | Hertz API、扫描调度与工作台接口 | 待生成 |
 
 ## 本地运行
@@ -30,7 +30,15 @@ go test ./...
 go run ./cmd/ashare-mvp -db ./data/ashare.db
 ```
 
-首次运行会创建 SQLite 文件并执行嵌入式 SQL migration。
+CZSC 服务：
+```bash
+cd czsc-service
+python -m venv .venv
+pip install -r requirements.txt
+python app.py
+```
+
+默认 CZSC 监听 127.0.0.1:8091。
 
 ## 实施原则
 

@@ -17,7 +17,6 @@ import (
 	"github.com/780662833/aShare-mvp/internal/marketdata"
 )
 
-// Client 只覆盖本适配器实际调用的 gotdx 公开方法，便于测试注入。
 type Client interface {
 	StockAll(market uint8) ([]proto.Security, error)
 	StockKLine(category uint16, market uint8, code string, start uint16, count uint16, times uint16, adjust uint16) ([]proto.SecurityBar, error)
@@ -44,8 +43,8 @@ func New(cfg Config) *Adapter {
 		cfg.SettleDelay = time.Minute
 	}
 	return &Adapter{
-		client:      tdx.New(tdx.WithTimeoutSec(cfg.TimeoutSeconds)),
-		now:         time.Now,
+		client: tdx.New(tdx.WithTimeoutSec(cfg.TimeoutSeconds)),
+		now: time.Now,
 		settleDelay: cfg.SettleDelay,
 	}
 }
@@ -70,11 +69,11 @@ func (a *Adapter) Close() {
 }
 
 type MarketFetchStatus struct {
-	Exchange  universe.Exchange `json:"exchange"`
-	RawCount  int                `json:"raw_count"`
-	StockCount int               `json:"stock_count"`
-	Success   bool               `json:"success"`
-	Error     string             `json:"error,omitempty"`
+	Exchange   universe.Exchange `json:"exchange"`
+	RawCount   int                `json:"raw_count"`
+	StockCount int                `json:"stock_count"`
+	Success    bool               `json:"success"`
+	Error      string             `json:"error,omitempty"`
 }
 
 type UniverseResult struct {
@@ -94,8 +93,8 @@ func (r UniverseResult) Complete() bool {
 	return true
 }
 
-// FetchUniverse 分市场调用 StockAll，任何一个市场失败都返回不完整结果和 error。
-// 调用方必须检查 Complete()，不能把部分名单覆盖为全市场完整名单。
+// FetchUniverse 按 SZ / SH / BJ 分市场调用 StockAll。
+// 任一市场失败都返回不完整结果和 error，调用方不能将部分名单覆盖为全市场名单。
 func (a *Adapter) FetchUniverse(ctx context.Context) (UniverseResult, error) {
 	result := UniverseResult{Securities: make([]universe.StockBasic, 0), Markets: make([]MarketFetchStatus, 0, 3)}
 	markets := []types.Market{types.MarketSZ, types.MarketSH, types.MarketBJ}
@@ -159,7 +158,7 @@ func (a *Adapter) fetchAll(market uint8) ([]proto.Security, error) {
 }
 
 // FetchBars 直接调用 gotdx StockKLine 获取日线、30 分钟或 60 分钟数据。
-// gotdx 不提供显式 is_complete 字段；这里仅按 K 线结束时间 + settle delay 做保守时钟判断。
+// gotdx 未提供显式 is_complete 字段，这里仅按 K 线结束时间 + settle delay 做时钟判断。
 func (a *Adapter) FetchBars(ctx context.Context, tsCode string, freq marketdata.Frequency, count uint16) ([]marketdata.Bar, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -204,7 +203,7 @@ func (a *Adapter) FetchBars(ctx context.Context, tsCode string, freq marketdata.
 			FetchedAt: now,
 		})
 	}
-	sort.Slice(bars, func(i, j int) bool { return bars[i].BarTime.Before(bars[j].BarTime) })
+	// 不主动排序：若数据源顺序违反契约，ValidateBatch 应明确失败。
 	if len(bars) == 0 {
 		return bars, nil
 	}

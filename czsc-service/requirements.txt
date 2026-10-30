@@ -1,0 +1,2 @@
+# Pin to the inspected CZSC 1.0.x API revision.
+czsc @ git+https://github.com/waditu/czsc.git@5d350a943d6b1935561765fed5467c234973d121
