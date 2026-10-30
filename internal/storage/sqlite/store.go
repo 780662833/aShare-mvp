@@ -10,7 +10,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/780662833/aShare-mvp/internal/market/calendar"
@@ -38,8 +40,12 @@ func Open(ctx context.Context, dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("创建数据库目录失败: %w", err)
 	}
 
-	// 使用 file URL 对空格和 Windows 路径进行转义；所有连接都启用 WAL 与 busy_timeout。
-	u := url.URL{Scheme: "file", Path: filepath.ToSlash(absPath)}
+	// Windows 绝对路径需要保留盘符但避免被 URL parser 解释成 authority。
+	dsnPath := filepath.ToSlash(absPath)
+	if runtime.GOOS == "windows" {
+		dsnPath = "/" + dsnPath
+	}
+	u := url.URL{Scheme: "file", Path: dsnPath}
 	dsn := u.String() + "?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(1)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -103,7 +109,16 @@ func (s *Store) Migrate(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, string(content)); err == nil {
+		for _, statement := range strings.Split(string(content), ";") {
+			statement = strings.TrimSpace(statement)
+			if statement == "" {
+				continue
+			}
+			if _, err = tx.ExecContext(ctx, statement); err != nil {
+				break
+			}
+		}
+		if err == nil {
 			_, err = tx.ExecContext(ctx,
 				"INSERT INTO schema_migrations(name, applied_at) VALUES(?, ?)",
 				entry.Name(), time.Now().In(marketdata.ShanghaiLocation()).Format(time.RFC3339))
