@@ -366,3 +366,152 @@ func (s *Store) ListBars(ctx context.Context, tsCode string, freq marketdata.Fre
 	}
 	return result, rows.Err()
 }
+
+
+// GetStockBasic 按规范证券代码读取证券基础资料。
+func (s *Store) GetStockBasic(ctx context.Context, tsCode string) (universe.StockBasic, error) {
+	var item universe.StockBasic
+	var exchange, status string
+	err := s.db.QueryRowContext(ctx, `SELECT
+		ts_code, symbol, name, area, industry, fullname, enname, cnspell,
+		market, exchange, curr_type, list_status, list_date, delist_date, is_hs
+		FROM stock_basic WHERE ts_code = ?`, tsCode).Scan(
+		&item.TsCode, &item.Symbol, &item.Name, &item.Area, &item.Industry,
+		&item.Fullname, &item.Ename, &item.Cnspell, &item.Market, &exchange,
+		&item.CurrType, &status, &item.ListDate, &item.DelistDate, &item.IsHS,
+	)
+	if err != nil {
+		return universe.StockBasic{}, err
+	}
+	item.Exchange = universe.Exchange(exchange)
+	item.ListStatus = universe.ListingStatus(status)
+	return item, nil
+}
+
+// GetSecurityDailyState 读取不晚于指定交易日的最近一条证券状态快照。
+func (s *Store) GetSecurityDailyState(ctx context.Context, tsCode, onOrBefore string) (universe.SecurityDailyState, error) {
+	var item universe.SecurityDailyState
+	var stType, suspendType, fetchedAt string
+	err := s.db.QueryRowContext(ctx, `SELECT
+		trade_date, ts_code, st_type, suspend_type, suspend_timing, source, fetched_at
+		FROM security_daily_state
+		WHERE ts_code = ? AND trade_date <= ?
+		ORDER BY trade_date DESC LIMIT 1`, tsCode, onOrBefore).Scan(
+		&item.TradeDate, &item.TsCode, &stType, &suspendType,
+		&item.SuspendTiming, &item.Source, &fetchedAt,
+	)
+	if err != nil {
+		return universe.SecurityDailyState{}, err
+	}
+	item.STType = universe.STType(stType)
+	item.SuspendType = universe.SuspendType(suspendType)
+	item.FetchedAt, err = time.Parse(time.RFC3339Nano, fetchedAt)
+	if err != nil {
+		return universe.SecurityDailyState{}, fmt.Errorf("解析证券状态 fetched_at 失败: %w", err)
+	}
+	return item, nil
+}
+
+// GetTradeDay 按交易所和自然日期读取精确日历事实；缺少记录时返回 sql.ErrNoRows。
+func (s *Store) GetTradeDay(ctx context.Context, exchange calendar.Exchange, date string) (calendar.TradeDay, error) {
+	var item calendar.TradeDay
+	var isOpen int
+	var fetchedAt string
+	var source string
+	err := s.db.QueryRowContext(ctx, `SELECT
+		exchange, cal_date, is_open, pretrade_date, source, source_url, fetched_at
+		FROM trade_calendar WHERE exchange = ? AND cal_date = ?`,
+		string(exchange), date).Scan(
+		&item.Exchange, &item.CalDate, &isOpen, &item.PretradeDate,
+		&source, &item.SourceURL, &fetchedAt,
+	)
+	if err != nil {
+		return calendar.TradeDay{}, err
+	}
+	item.IsOpen = isOpen == 1
+	item.Source = calendar.Source(source)
+	item.FetchedAt, err = time.Parse(time.RFC3339Nano, fetchedAt)
+	if err != nil {
+		return calendar.TradeDay{}, fmt.Errorf("解析交易日历 fetched_at 失败: %w", err)
+	}
+	return item, nil
+}
+
+// GetLatestOpenTradeDay 读取不晚于指定自然日期的最近一个已知开市日。
+func (s *Store) GetLatestOpenTradeDay(ctx context.Context, exchange calendar.Exchange, onOrBefore string) (calendar.TradeDay, error) {
+	var item calendar.TradeDay
+	var isOpen int
+	var fetchedAt, source string
+	err := s.db.QueryRowContext(ctx, `SELECT
+		exchange, cal_date, is_open, pretrade_date, source, source_url, fetched_at
+		FROM trade_calendar
+		WHERE exchange = ? AND cal_date <= ? AND is_open = 1
+		ORDER BY cal_date DESC LIMIT 1`, string(exchange), onOrBefore).Scan(
+		&item.Exchange, &item.CalDate, &isOpen, &item.PretradeDate,
+		&source, &item.SourceURL, &fetchedAt,
+	)
+	if err != nil {
+		return calendar.TradeDay{}, err
+	}
+	item.IsOpen = isOpen == 1
+	item.Source = calendar.Source(source)
+	item.FetchedAt, err = time.Parse(time.RFC3339Nano, fetchedAt)
+	if err != nil {
+		return calendar.TradeDay{}, fmt.Errorf("解析交易日历 fetched_at 失败: %w", err)
+	}
+	return item, nil
+}
+
+// ListRecentBars 读取 as_of 之前最近的已完成 K 线，并按正序返回给指标和 CZSC。
+func (s *Store) ListRecentBars(ctx context.Context, tsCode string, freq marketdata.Frequency, adjust marketdata.AdjustMode, asOf time.Time, limit int) ([]marketdata.Bar, error) {
+	if strings.TrimSpace(tsCode) == "" || !freq.Valid() || asOf.IsZero() || limit <= 0 || limit > 5000 {
+		return nil, fmt.Errorf("ListRecentBars 参数无效")
+	}
+	if adjust != marketdata.AdjustQFQ && adjust != marketdata.AdjustHFQ && adjust != marketdata.AdjustNone {
+		return nil, fmt.Errorf("ListRecentBars 复权口径无效: %q", adjust)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT
+		ts_code, freq, bar_time, open, high, low, close, volume, amount,
+		adjust_mode, volume_unit, source, is_complete, fetched_at
+		FROM stock_kline
+		WHERE ts_code = ? AND freq = ? AND adjust_mode = ?
+			AND bar_time <= ? AND is_complete = 1
+		ORDER BY bar_time DESC LIMIT ?`,
+		tsCode, string(freq), string(adjust), asOf.Format(time.RFC3339Nano), limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]marketdata.Bar, 0, limit)
+	for rows.Next() {
+		var bar marketdata.Bar
+		var freqValue, adjustValue, volumeUnitValue, barTimeValue, fetchedAtValue string
+		var isComplete int
+		if err := rows.Scan(&bar.TsCode, &freqValue, &barTimeValue, &bar.Open, &bar.High,
+			&bar.Low, &bar.Close, &bar.Volume, &bar.Amount, &adjustValue,
+			&volumeUnitValue, &bar.Source, &isComplete, &fetchedAtValue); err != nil {
+			return nil, err
+		}
+		bar.Frequency = marketdata.Frequency(freqValue)
+		bar.AdjustMode = marketdata.AdjustMode(adjustValue)
+		bar.VolumeUnit = marketdata.VolumeUnit(volumeUnitValue)
+		bar.BarTime, err = time.Parse(time.RFC3339Nano, barTimeValue)
+		if err != nil {
+			return nil, err
+		}
+		bar.FetchedAt, err = time.Parse(time.RFC3339Nano, fetchedAtValue)
+		if err != nil {
+			return nil, err
+		}
+		bar.IsComplete = isComplete == 1
+		result = append(result, bar)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for left, right := 0, len(result)-1; left < right; left, right = left+1, right-1 {
+		result[left], result[right] = result[right], result[left]
+	}
+	return result, nil
+}
