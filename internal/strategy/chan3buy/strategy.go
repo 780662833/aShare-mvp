@@ -187,7 +187,10 @@ func (s *Strategy) Evaluate(ctx context.Context, input contract.StrategyInput) (
 		Confidence: contract.GradeHigh,
 	})
 
-	if m60.SignalAgeBars != nil && *m60.SignalAgeBars > s.config.MaxSignalAgeBars {
+	if m60.SignalAgeBars == nil {
+		return wait(decision, "THIRD_BUY_SIGNAL_AGE_UNKNOWN", "缺少主三买信号持续 K 线年龄，无法确认信号仍处于有效观察窗口"), nil
+	}
+	if *m60.SignalAgeBars > s.config.MaxSignalAgeBars {
 		decision.Status = contract.StatusExpired
 		contract.AppendReason(&decision, "THIRD_BUY_SETUP_EXPIRED")
 		decision.RiskWarnings = append(decision.RiskWarnings, contract.Evidence{
