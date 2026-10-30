@@ -17,7 +17,7 @@ import (
 
 const (
 	StrategyID      = "trend_breakout"
-	StrategyVersion = "1.0.0"
+	StrategyVersion = "1.1.0"
 
 	d1Profile        = czscclient.SignalProfileTrendD1
 	d1ProfileVersion = "trend-breakout-d1-v1"
