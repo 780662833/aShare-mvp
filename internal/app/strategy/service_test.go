@@ -303,3 +303,21 @@ func TestEvaluateSymbolOrchestratesThreeCZSCProfilesAndTwoIndependentStrategies(
 		t.Fatalf("尚无市场环境数据时应显式保留 UNKNOWN，得到 %s", result.MarketStatus)
 	}
 }
+
+
+func TestExpectedBarTimesRejectsMissingPreviousCalendarDate(t *testing.T) {
+	repo := validRepository()
+	delete(repo.days, "2026-10-29")
+	asOf := marketdata.ShanghaiWallTime(2026, 10, 30, 11, 1)
+	_, _, issues := expectedBarTimes(context.Background(), repo, calendar.SSE, asOf)
+	found := false
+	for _, issue := range issues {
+		if issue == "PREVIOUS_TRADING_CALENDAR_UNKNOWN" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("前一自然日日历记录缺失时应 fail-closed，实际问题=%v", issues)
+	}
+}
