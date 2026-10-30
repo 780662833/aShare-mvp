@@ -395,9 +395,16 @@ func expectedBarTimes(
 	}
 
 	priorDate := asOf.AddDate(0, 0, -1).Format("2006-01-02")
+	priorCalendarDay, priorCalendarErr := repo.GetTradeDay(ctx, exchange, priorDate)
+	if priorCalendarErr != nil {
+		issues = append(issues, "PREVIOUS_TRADING_CALENDAR_UNKNOWN")
+	}
 	priorOpen, priorErr := repo.GetLatestOpenTradeDay(ctx, exchange, priorDate)
 	var priorClose time.Time
 	if priorErr == nil {
+		if priorCalendarErr == nil && priorCalendarDay.IsOpen && priorOpen.CalDate != priorDate {
+			issues = append(issues, "PREVIOUS_TRADE_DAY_CONFLICT")
+		}
 		priorClose, err = closeTime(priorOpen.CalDate)
 		if err != nil {
 			issues = append(issues, "PREVIOUS_TRADE_DAY_INVALID")
