@@ -53,7 +53,7 @@ class ValidatePayloadTests(unittest.TestCase):
     def test_rejects_unsorted_or_duplicate_time(self):
         payload = sample_payload()
         second = dict(payload["bars"][0])
-        second["dt"] = (datetime.fromisoformat(payload["bars"][0]["dt"]) + timedelta(minutes=30)).isoformat()
+        second["dt"] = payload["bars"][0]["dt"]
         payload["bars"].append(second)
         with self.assertRaises(ValueError):
             validate_payload(payload)
