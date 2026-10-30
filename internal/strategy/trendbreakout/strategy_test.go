@@ -50,11 +50,11 @@ func trendInput() contract.StrategyInput {
 	daily = append(daily, trendBar(marketdata.FrequencyD1, currentDailyTime, 115.0, 115.8, 113.8, 1800))
 
 	m60 := []marketdata.Bar{
-		trendBar(marketdata.FrequencyM60, marketdata.ShanghaiWallTime(2026, 10, 30, 13, 0), 114.5, 115.0, 114.0, 500),
-		trendBar(marketdata.FrequencyM60, marketdata.ShanghaiWallTime(2026, 10, 30, 14, 0), 114.8, 115.2, 114.2, 550),
+		trendBar(marketdata.FrequencyM60, marketdata.ShanghaiWallTime(2026, 11, 2, 10, 30), 114.5, 115.0, 114.0, 500),
+		trendBar(marketdata.FrequencyM60, marketdata.ShanghaiWallTime(2026, 11, 2, 11, 30), 114.8, 115.2, 114.2, 550),
 	}
 	m30 := []marketdata.Bar{
-		trendBar(marketdata.FrequencyM30, marketdata.ShanghaiWallTime(2026, 10, 30, 14, 30), 115.6, 115.9, 114.9, 250),
+		trendBar(marketdata.FrequencyM30, marketdata.ShanghaiWallTime(2026, 11, 2, 13, 0), 115.6, 115.9, 114.9, 250),
 	}
 	return contract.StrategyInput{
 		Security: universe.StockBasic{
@@ -62,11 +62,11 @@ func trendInput() contract.StrategyInput {
 			Exchange: universe.ExchangeSSE, ListStatus: universe.ListingActive,
 		},
 		DailyState: universe.SecurityDailyState{
-			TradeDate: "2026-10-30", TsCode: "600519.SH",
+			TradeDate: "2026-11-02", TsCode: "600519.SH",
 			STType: universe.STNone, SuspendType: universe.SuspendNone,
-			Source: "test", FetchedAt: marketdata.ShanghaiWallTime(2026, 10, 30, 16, 0),
+			Source: "test", FetchedAt: marketdata.ShanghaiWallTime(2026, 11, 2, 13, 30),
 		},
-		AsOf: marketdata.ShanghaiWallTime(2026, 10, 30, 16, 0),
+		AsOf: marketdata.ShanghaiWallTime(2026, 11, 2, 13, 30),
 		Bars: map[marketdata.Frequency][]marketdata.Bar{
 			marketdata.FrequencyD1: daily,
 			marketdata.FrequencyM60: m60,
@@ -101,7 +101,7 @@ func trendInput() contract.StrategyInput {
 			},
 		},
 		MarketContext: contract.MarketContext{
-			AsOf: marketdata.ShanghaiWallTime(2026, 10, 30, 15, 0),
+			AsOf: marketdata.ShanghaiWallTime(2026, 11, 2, 13, 30),
 			Status: contract.MarketFavorable,
 			DataVersion: "market-context-test-v1",
 		},
@@ -171,6 +171,38 @@ func TestEvaluateWaitsWhenVolumeQualityIsInsufficient(t *testing.T) {
 	}
 	if decision.Status != contract.StatusWaitEntry || !hasReason(decision, "BREAKOUT_QUALITY_NOT_CONFIRMED") {
 		t.Fatalf("量价不足应等待，不应升级为买入观察: %+v", decision)
+	}
+}
+
+func TestEvaluateDoesNotUseM60BarsBeforeDailyBreakoutConfirmation(t *testing.T) {
+	strategy, err := New(trendConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := trendInput()
+	m60 := input.Bars[marketdata.FrequencyM60]
+	for i := range m60 {
+		m60[i].BarTime = marketdata.ShanghaiWallTime(2026, 10, 30, 13+i, 0)
+		m60[i].FetchedAt = m60[i].BarTime.Add(30 * time.Minute)
+	}
+	input.Bars[marketdata.FrequencyM60] = m60
+	m30 := input.Bars[marketdata.FrequencyM30]
+	m30[0].BarTime = marketdata.ShanghaiWallTime(2026, 10, 30, 14, 30)
+	m30[0].FetchedAt = m30[0].BarTime.Add(30 * time.Minute)
+	input.Bars[marketdata.FrequencyM30] = m30
+	d1 := input.Technical[marketdata.FrequencyD1]
+	d1.AsOf = input.Bars[marketdata.FrequencyD1][len(input.Bars[marketdata.FrequencyD1])-1].BarTime
+	input.Technical[marketdata.FrequencyD1] = d1
+	m30Tech := input.Technical[marketdata.FrequencyM30]
+	m30Tech.AsOf = m30[0].BarTime
+	input.Technical[marketdata.FrequencyM30] = m30Tech
+
+	decision, err := strategy.Evaluate(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Status != contract.StatusWaitEntry || !hasReason(decision, "M60_BREAKOUT_HOLD_NOT_CONFIRMED") {
+		t.Fatalf("日线确认之前的 60 分钟数据不能作为突破后站稳证据: %+v", decision)
 	}
 }
 
