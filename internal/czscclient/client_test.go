@@ -44,14 +44,16 @@ func TestBuildRequestRejectsFormingBars(t *testing.T) {
 func TestAnalyzeHTTPRoundTrip(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/analyze" {
-			t.Fatalf("路径错误: %s", r.URL.Path)
+			t.Errorf("路径错误: %s", r.URL.Path)
 		}
 		var input AnalyzeRequest
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-			t.Fatal(err)
+			t.Errorf("解析请求体失败: %v", err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
 		}
 		if input.TsCode != "600519.SH" || len(input.Bars) != 1 {
-			t.Fatalf("请求体错误: %+v", input)
+			t.Errorf("请求体错误: %+v", input)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(AnalyzeResponse{

@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import math
 from typing import Any
 
-FREQ_MAP = {
-    "日线": "D",
-    "30分钟": "F30",
-    "60分钟": "F60",
-}
+FREQ_MAP = {"日线": "D", "30分钟": "F30", "60分钟": "F60"}
 VALID_ADJUST = {"QFQ", "HFQ", "NONE"}
 MAX_BARS = 5000
+SHANGHAI_TZ = timezone(timedelta(hours=8))
 
 
 def _finite_number(value: Any, field: str, *, positive: bool = False) -> float:
@@ -29,6 +26,29 @@ def _finite_number(value: Any, field: str, *, positive: bool = False) -> float:
     if not positive and number < 0:
         raise ValueError(f"{field} 不能小于 0")
     return number
+
+
+def _czsc_wall_time(value: datetime) -> datetime:
+    """保留上海市场墙上时间数值，转换为 CZSC 要求的 naive datetime。
+
+    CZSC 1.0.x RawBar 内部以 UTC DateTime 存储市场时间数值，构造器拒绝
+    tz-aware 入参。因此这里只移除 tzinfo，不调用 astimezone/utc，也不改变
+    hour/minute。否则 09:30+08 会被换算为 01:30，破坏 A 股周期桶定位。
+    """
+    if value.tzinfo is None or value.utcoffset() != timedelta(hours=8):
+        raise ValueError("市场时间必须显式带 +08:00")
+    return value.replace(tzinfo=None)
+
+
+def _market_iso(value: Any) -> str:
+    """CZSC 返回 naive datetime；重新附加 +08:00 标签，不做时间数值换算。"""
+    if hasattr(value, "to_pydatetime"):
+        value = value.to_pydatetime()
+    if isinstance(value, datetime) and value.tzinfo is None:
+        value = value.replace(tzinfo=SHANGHAI_TZ)
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
 
 
 def validate_payload(payload: Any) -> dict[str, Any]:
@@ -77,6 +97,7 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 
         bar = {
             "dt": dt,
+            "czsc_dt": _czsc_wall_time(dt),
             "symbol": symbol,
             "open": _finite_number(raw.get("open"), f"bars[{index}].open", positive=True),
             "close": _finite_number(raw.get("close"), f"bars[{index}].close", positive=True),
@@ -102,39 +123,19 @@ def validate_payload(payload: Any) -> dict[str, Any]:
     }
 
 
-def _iso(value: Any) -> str:
-    if hasattr(value, "isoformat"):
-        return value.isoformat()
-    return str(value)
-
-
 def analyze_payload(payload: Any) -> dict[str, Any]:
     request = validate_payload(payload)
-
-    # 延迟导入，允许无 CZSC 的环境运行 DTO 校验和单元测试。
     try:
         from czsc import CZSC, Freq, RawBar
     except ImportError as exc:
         raise RuntimeError("CZSC 未安装或 Rust/PyO3 扩展不可用") from exc
 
-    freq = {
-        "D": Freq.D,
-        "F30": Freq.F30,
-        "F60": Freq.F60,
-    }[request["freq_native"]]
-
+    freq = {"D": Freq.D, "F30": Freq.F30, "F60": Freq.F60}[request["freq_native"]]
     raw_bars = [
         RawBar(
-            item["symbol"],
-            item["dt"],
-            freq,
-            item["open"],
-            item["close"],
-            item["high"],
-            item["low"],
-            item["vol"],
-            item["amount"],
-            index,
+            item["symbol"], item["czsc_dt"], freq,
+            item["open"], item["close"], item["high"], item["low"],
+            item["vol"], item["amount"], index,
         )
         for index, item in enumerate(request["bars"])
     ]
@@ -142,7 +143,7 @@ def analyze_payload(payload: Any) -> dict[str, Any]:
 
     recent_fx = [
         {
-            "dt": _iso(item.dt),
+            "dt": _market_iso(item.dt),
             "mark": item.mark.name,
             "fx": float(item.fx),
             "high": float(item.high),
@@ -152,8 +153,8 @@ def analyze_payload(payload: Any) -> dict[str, Any]:
     ]
     recent_bi = [
         {
-            "start_time": _iso(item.sdt),
-            "end_time": _iso(item.edt),
+            "start_time": _market_iso(item.sdt),
+            "end_time": _market_iso(item.edt),
             "direction": item.direction.name,
             "high": float(item.high),
             "low": float(item.low),
@@ -164,8 +165,8 @@ def analyze_payload(payload: Any) -> dict[str, Any]:
     ]
     recent_zs = [
         {
-            "start_time": _iso(item.sdt),
-            "end_time": _iso(item.edt),
+            "start_time": _market_iso(item.sdt),
+            "end_time": _market_iso(item.edt),
             "zg": float(item.zg),
             "zd": float(item.zd),
             "zz": float(item.zz),
@@ -179,7 +180,7 @@ def analyze_payload(payload: Any) -> dict[str, Any]:
         "freq": request["freq"],
         "adjust_mode": request["adjust_mode"],
         "source": request["source"],
-        "as_of": _iso(request["bars"][-1]["dt"]),
+        "as_of": request["bars"][-1]["dt"].isoformat(),
         "input_bar_count": len(raw_bars),
         "fx_count": len(analyzer.fx_list),
         "bi_count": len(analyzer.bi_list),

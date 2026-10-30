@@ -10,6 +10,16 @@
 - czsc-service：锁定 CZSC 上游 commit 的 Python 服务，使用 RawBar / CZSC 公开 API。
 - 服务默认只监听本机回环地址；远程监听必须配置 token。
 
+## 关键时间语义（已按上游源码核实）
+
+CZSC 1.0.x 的 RawBar 内部以 UTC DateTime 保存市场时间字段，RawBar Python 构造器拒绝 tz-aware datetime。若将 09:30+08:00 直接传入，会抛 ValueError；若调用 astimezone(UTC)，则会错误地变为 01:30，破坏 A 股周期桶。
+
+因此服务执行：
+1. 输入必须显式带 +08:00；
+2. 只移除 Python datetime 的 tzinfo，保留相同年月日时分数值传给 RawBar；
+3. CZSC 输出的 naive 时间再附加 +08:00 标签，仍不换算数值；
+4. 这符合 CZSC 该版本“市场本地墙上时间以 UTC 数值存储”的设计。
+
 ## 数据边界
 
 - 不允许未完成 K 线进入正式分析。
