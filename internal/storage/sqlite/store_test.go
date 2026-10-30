@@ -184,9 +184,10 @@ func TestUpsertBarsRejectsSilentSourceSwitch(t *testing.T) {
 
 	switched := bar
 	switched.Source = "provider-b"
+	switched.BarTime = at.Add(30 * time.Minute)
 	switched.Close = 101
 	if err := store.UpsertBars(ctx, []marketdata.Bar{switched}); err == nil {
-		t.Fatal("数据源切换不得静默覆盖已有 K 线")
+		t.Fatal("同一证券/周期/复权序列不得在新时间点静默混用其他数据源")
 	}
 
 	var source string
