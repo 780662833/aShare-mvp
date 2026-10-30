@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"net/url"
@@ -18,6 +19,7 @@ import (
 	"github.com/780662833/aShare-mvp/internal/market/calendar"
 	"github.com/780662833/aShare-mvp/internal/market/universe"
 	"github.com/780662833/aShare-mvp/internal/marketdata"
+	"github.com/780662833/aShare-mvp/internal/strategy/contract"
 	_ "modernc.org/sqlite"
 )
 
@@ -514,4 +516,74 @@ func (s *Store) ListRecentBars(ctx context.Context, tsCode string, freq marketda
 		result[left], result[right] = result[right], result[left]
 	}
 	return result, nil
+}
+
+
+// SaveStrategyDecision 以 decision_id 幂等保存完整策略结论及可审计证据。
+func (s *Store) SaveStrategyDecision(ctx context.Context, decision contract.StrategyDecision) error {
+	if decision.DecisionID == "" || decision.TsCode == "" || decision.StrategyID == "" ||
+		decision.StrategyVersion == "" || decision.ConfigVersion == "" ||
+		decision.AsOf.IsZero() || decision.DataVersion == "" {
+		return fmt.Errorf("策略决策缺少持久化必需字段")
+	}
+	payload, err := json.Marshal(decision)
+	if err != nil {
+		return fmt.Errorf("序列化策略决策失败: %w", err)
+	}
+	confirmedAt := ""
+	if decision.ConfirmedAt != nil {
+		confirmedAt = decision.ConfirmedAt.Format(time.RFC3339Nano)
+	}
+	asOf := decision.AsOf.Format(time.RFC3339Nano)
+	savedAt := time.Now().In(marketdata.ShanghaiLocation()).Format(time.RFC3339Nano)
+	result, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO strategy_decisions (
+		decision_id, ts_code, strategy_id, strategy_version, config_version,
+		as_of, confirmed_at, status, data_version, payload, saved_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		decision.DecisionID, decision.TsCode, decision.StrategyID,
+		decision.StrategyVersion, decision.ConfigVersion, asOf, confirmedAt,
+		string(decision.Status), decision.DataVersion, string(payload), savedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("保存策略决策失败: %w", err)
+	}
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if inserted == 0 {
+		var existing string
+		if err := s.db.QueryRowContext(ctx,
+			"SELECT payload FROM strategy_decisions WHERE decision_id = ?",
+			decision.DecisionID,
+		).Scan(&existing); err != nil {
+			return fmt.Errorf("读取已存在策略决策失败: %w", err)
+		}
+		if existing != string(payload) {
+			return fmt.Errorf("decision_id 冲突：相同决策标识对应不同 payload")
+		}
+	}
+	return nil
+}
+
+// GetLatestStrategyDecisionBefore 读取指定时点之前最近一条策略结论。
+// 不读取相同 as_of 的结论，避免重放同一快照时把自身当作 PreviousDecision。
+func (s *Store) GetLatestStrategyDecisionBefore(ctx context.Context, tsCode, strategyID string, asOf time.Time) (contract.StrategyDecision, error) {
+	if tsCode == "" || strategyID == "" || asOf.IsZero() {
+		return contract.StrategyDecision{}, fmt.Errorf("读取上一条策略决策的参数无效")
+	}
+	var payload string
+	err := s.db.QueryRowContext(ctx, `SELECT payload FROM strategy_decisions
+		WHERE ts_code = ? AND strategy_id = ? AND as_of < ?
+		ORDER BY as_of DESC LIMIT 1`,
+		tsCode, strategyID, asOf.Format(time.RFC3339Nano),
+	).Scan(&payload)
+	if err != nil {
+		return contract.StrategyDecision{}, err
+	}
+	var decision contract.StrategyDecision
+	if err := json.Unmarshal([]byte(payload), &decision); err != nil {
+		return contract.StrategyDecision{}, fmt.Errorf("解析上一条策略决策失败: %w", err)
+	}
+	return decision, nil
 }
