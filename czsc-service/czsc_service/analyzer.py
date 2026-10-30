@@ -44,8 +44,12 @@ def _market_iso(value: Any) -> str:
     """CZSC 返回 naive datetime；重新附加 +08:00 标签，不做时间数值换算。"""
     if hasattr(value, "to_pydatetime"):
         value = value.to_pydatetime()
-    if isinstance(value, datetime) and value.tzinfo is None:
-        value = value.replace(tzinfo=SHANGHAI_TZ)
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=SHANGHAI_TZ)
+        elif value.utcoffset() != timedelta(hours=8):
+            raise ValueError("CZSC 输出时间必须保留 Asia/Shanghai +08:00 语义")
+        return value.isoformat()
     if hasattr(value, "isoformat"):
         return value.isoformat()
     return str(value)
