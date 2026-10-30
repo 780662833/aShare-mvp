@@ -20,7 +20,7 @@ import (
 type Client interface {
 	StockAll(market uint8) ([]proto.Security, error)
 	StockKLine(category uint16, market uint8, code string, start uint16, count uint16, times uint16, adjust uint16) ([]proto.SecurityBar, error)
-	Disconnect()
+	Disconnect() error
 }
 
 type Config struct {
