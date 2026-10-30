@@ -92,7 +92,7 @@ func New(repo Repository, analyzer Analyzer, config Config) (*Service, error) {
 }
 
 // EvaluateSymbol 在指定 as_of 时点对单只股票执行一次双策略评估。
-// V1 首版采用收盘后快照：日线、30 分钟和 60 分钟最新完整 K 线均须到达最近开市日 15:00。
+// 按 as_of 与交易时段分别校验 D1/M60/M30 最新完整 K 线；允许盘中较短周期先于较长周期确认。
 func (s *Service) EvaluateSymbol(ctx context.Context, tsCode string, asOf time.Time) (Result, error) {
 	result := Result{TsCode: tsCode, Decisions: make([]contract.StrategyDecision, 0, 2)}
 	if err := ctx.Err(); err != nil {
@@ -161,9 +161,6 @@ func (s *Service) EvaluateSymbol(ctx context.Context, tsCode string, asOf time.T
 			continue
 		}
 		input.Bars[frequency] = bars
-		if len(bars) < s.config.HistoryBars {
-			// A shorter warm-up window is allowed; strategy-level feature checks decide if it is sufficient.
-		}
 		expectedBarTime := expectedTimes[frequency]
 		if expectedBarTime.IsZero() {
 			issues = append(issues, "EXPECTED_BAR_TIME_"+string(frequency)+"_UNKNOWN")
