@@ -44,6 +44,7 @@ const (
 
 type Run = scanmodel.Run
 type Item = scanmodel.Item
+type StrategyResult = scanmodel.StrategyResult
 
 type Repository interface {
 	ListActiveStockBasics(context.Context) ([]universe.StockBasic, error)
