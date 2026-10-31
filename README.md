@@ -45,12 +45,15 @@ S5 通过 PR [#6](https://github.com/780662833/aShare-mvp/pull/6) 合并到 `mai
 
 ## 本地运行
 
-需要 Go 1.27.2 或更高版本。
+需要 Go 1.27.2 或更高版本。当前提供 CLI 串联已有行情适配、单股评估、扫描、扫描结果读取和历史决策查询。完整步骤与参考数据格式见 [CLI 实际运行说明](docs/implementation/08-runtime-cli.md)。
 
-```bash
-go test ./...
-go run ./cmd/ashare-mvp -db ./data/ashare.db
+```powershell
+go test ./... -count=1
+go run ./cmd/ashare-mvp init
+go run ./cmd/ashare-mvp help
 ```
+
+策略配置模板：复制 `configs/runtime.example.json` 为本地配置文件。模板阈值只是配置格式演示，不是经过回测/实盘验证的推荐参数，运行前必须由使用者确认并修改配置版本。gotdx 不提供本项目所需的交易日历和逐日 ST/停牌状态，这些参考数据必须从可信来源导入；证券状态为 UNKNOWN 的记录不会进入扫描池。
 
 CZSC 服务：
 
