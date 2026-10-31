@@ -34,6 +34,45 @@ func (s *Store) GetScanResult(ctx context.Context, scanID string) (ScanResult, e
 		return ScanResult{}, fmt.Errorf("读取扫描证券明细失败: %w", err)
 	}
 
+	// 先校验扫描明细数量，避免历史数据缺行或多行时返回不完整快照。
+	if len(items) != run.TotalCount {
+		return ScanResult{}, fmt.Errorf("扫描明细数量与总数不一致: items=%d total=%d", len(items), run.TotalCount)
+	}
+	var successCount, incompleteCount, analysisErrorCount, failedCount, pendingCount int
+	for _, item := range items {
+		switch item.Status {
+		case scanmodel.ItemSuccess:
+			successCount++
+		case scanmodel.ItemDataIncomplete:
+			incompleteCount++
+		case scanmodel.ItemAnalysisError:
+			analysisErrorCount++
+		case scanmodel.ItemFailed:
+			failedCount++
+		case scanmodel.ItemPending:
+			pendingCount++
+		default:
+			return ScanResult{}, fmt.Errorf("扫描证券 %s 存在未知状态: %q", item.TsCode, item.Status)
+		}
+	}
+	if run.Status != scanmodel.RunRunning {
+		if successCount != run.SuccessCount ||
+			incompleteCount != run.DataIncompleteCount ||
+			analysisErrorCount != run.AnalysisErrorCount ||
+			failedCount != run.FailedCount {
+			return ScanResult{}, fmt.Errorf("扫描汇总与逐股明细不一致: success=%d/%d data_incomplete=%d/%d analysis_error=%d/%d failed=%d/%d",
+				successCount, run.SuccessCount, incompleteCount, run.DataIncompleteCount,
+				analysisErrorCount, run.AnalysisErrorCount, failedCount, run.FailedCount)
+		}
+		if run.Status == scanmodel.RunCancelled {
+			if successCount+incompleteCount+analysisErrorCount+failedCount+pendingCount != run.TotalCount {
+				return ScanResult{}, fmt.Errorf("CANCELLED 扫描明细状态总数与扫描总数不一致")
+			}
+		} else if pendingCount != 0 {
+			return ScanResult{}, fmt.Errorf("终态扫描仍存在未处理证券: pending=%d", pendingCount)
+		}
+	}
+
 	type expectedDecision struct {
 		tsCode      string
 		strategyID  string

@@ -131,3 +131,64 @@ func TestGetScanResultRejectsEmptyScanID(t *testing.T) {
 		t.Fatal("空 scan_id 必须返回错误")
 	}
 }
+
+
+func TestGetScanResultValidatesSummaryConsistency(t *testing.T) {
+	tests := []struct {
+		name string
+		total int
+		runStatus scanmodel.RunStatus
+		success int
+		incomplete int
+		analysisError int
+		failed int
+		itemStatuses []scanmodel.ItemStatus
+		wantErr string
+	}{
+		{name: "明细数量与总数不一致", total: 3, runStatus: scanmodel.RunRunning, itemStatuses: []scanmodel.ItemStatus{scanmodel.ItemPending, scanmodel.ItemPending}, wantErr: "明细数量"},
+		{name: "SUCCESS 汇总不一致", total: 2, runStatus: scanmodel.RunCompleted, success: 1, itemStatuses: []scanmodel.ItemStatus{scanmodel.ItemSuccess, scanmodel.ItemSuccess}, wantErr: "汇总与逐股明细"},
+		{name: "DATA_INCOMPLETE 汇总不一致", total: 2, runStatus: scanmodel.RunPartial, success: 1, incomplete: 0, itemStatuses: []scanmodel.ItemStatus{scanmodel.ItemSuccess, scanmodel.ItemDataIncomplete}, wantErr: "汇总与逐股明细"},
+		{name: "ANALYSIS_ERROR 汇总不一致", total: 2, runStatus: scanmodel.RunPartial, success: 1, analysisError: 0, itemStatuses: []scanmodel.ItemStatus{scanmodel.ItemSuccess, scanmodel.ItemAnalysisError}, wantErr: "汇总与逐股明细"},
+		{name: "FAILED 汇总不一致", total: 2, runStatus: scanmodel.RunPartial, success: 1, failed: 0, itemStatuses: []scanmodel.ItemStatus{scanmodel.ItemSuccess, scanmodel.ItemFailed}, wantErr: "汇总与逐股明细"},
+		{name: "取消扫描允许 PENDING", total: 2, runStatus: scanmodel.RunCancelled, success: 1, itemStatuses: []scanmodel.ItemStatus{scanmodel.ItemSuccess, scanmodel.ItemPending}},
+		{name: "未知明细状态", total: 2, runStatus: scanmodel.RunRunning, itemStatuses: []scanmodel.ItemStatus{scanmodel.ItemPending, scanmodel.ItemStatus("CORRUPTED")}, wantErr: "未知状态"},
+		{name: "正常 COMPLETED", total: 2, runStatus: scanmodel.RunCompleted, success: 2, itemStatuses: []scanmodel.ItemStatus{scanmodel.ItemSuccess, scanmodel.ItemSuccess}},
+		{name: "RUNNING 不比较未终态汇总", total: 2, runStatus: scanmodel.RunRunning, itemStatuses: []scanmodel.ItemStatus{scanmodel.ItemPending, scanmodel.ItemPending}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			store, err := Open(ctx, filepath.Join(t.TempDir(), "summary-check.db"))
+			if err != nil { t.Fatal(err) }
+			defer store.Close()
+			asOf := marketdata.ShanghaiWallTime(2026, 10, 30, 15, 0)
+			started := asOf.Add(time.Minute)
+			run := scanmodel.Run{ID: "summary-check", AsOf: asOf, StartedAt: started, Status: scanmodel.RunRunning, TotalCount: 2}
+			items := make([]scanmodel.Item, 0, 2)
+			for _, code := range []string{"600519.SH", "000001.SZ"} {
+				items = append(items, scanmodel.Item{ScanID: run.ID, TsCode: code, Status: scanmodel.ItemPending})
+			}
+			if err := store.CreateScanRun(ctx, run, items); err != nil { t.Fatal(err) }
+			for i, status := range tt.itemStatuses {
+				item := items[i]
+				if status == scanmodel.ItemPending { continue }
+				item.Status = status
+				item.StartedAt = started
+				item.CompletedAt = started.Add(time.Second)
+				if err := store.UpdateScanRunItem(ctx, item); err != nil { t.Fatal(err) }
+			}
+			// 直接构造历史汇总异常，不经过写入端 CompleteScanRun 的一致性校验。
+			_, err = store.DB().ExecContext(ctx, `UPDATE scan_runs SET total_count=?, status=?, success_count=?, data_incomplete_count=?, analysis_error_count=?, failed_count=? WHERE scan_id=?`,
+				tt.total, string(tt.runStatus), tt.success, tt.incomplete, tt.analysisError, tt.failed, run.ID)
+			if err != nil { t.Fatal(err) }
+			_, err = store.GetScanResult(ctx, run.ID)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("期望错误包含 %q，实际: %v", tt.wantErr, err)
+				}
+				return
+			}
+			if err != nil { t.Fatalf("期望读取成功，实际: %v", err) }
+		})
+	}
+}
