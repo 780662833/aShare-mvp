@@ -8,6 +8,7 @@ import (
 	"time"
 
 	appstrategy "github.com/780662833/aShare-mvp/internal/app/strategy"
+	"github.com/780662833/aShare-mvp/internal/market/calendar"
 	"github.com/780662833/aShare-mvp/internal/market/universe"
 	"github.com/780662833/aShare-mvp/internal/marketdata"
 	"github.com/780662833/aShare-mvp/internal/strategy/chan3buy"
@@ -17,6 +18,9 @@ import (
 
 type fakeRepository struct {
 	securities []universe.StockBasic
+	states []universe.SecurityDailyState
+	calendarErr error
+	exclusions []Exclusion
 	run        Run
 	items      []Item
 	updated    []Item
@@ -25,10 +29,22 @@ type fakeRepository struct {
 func (f *fakeRepository) ListActiveStockBasics(context.Context) ([]universe.StockBasic, error) {
 	return f.securities, nil
 }
-func (f *fakeRepository) CreateScanRun(_ context.Context, run Run, items []Item) error {
-	f.run = run
-	f.items = append([]Item(nil), items...)
-	return nil
+func (f *fakeRepository) GetTradeDay(_ context.Context, exchange calendar.Exchange, date string) (calendar.TradeDay, error) {
+	if f.calendarErr != nil { return calendar.TradeDay{}, f.calendarErr }
+	return calendar.TradeDay{Exchange: exchange, CalDate: date, IsOpen: true, Source: calendar.SourceTushare, FetchedAt: marketdata.ShanghaiWallTime(2026, 10, 30, 14, 59)}, nil
+}
+func (f *fakeRepository) GetLatestOpenTradeDay(ctx context.Context, exchange calendar.Exchange, date string) (calendar.TradeDay, error) {
+	day, err := f.GetTradeDay(ctx, exchange, date); if err != nil { return calendar.TradeDay{}, err }; return day, nil
+}
+func (f *fakeRepository) ListSecurityDailyStates(_ context.Context, date string) ([]universe.SecurityDailyState, error) {
+	if f.states != nil { out := make([]universe.SecurityDailyState, 0); for _, state := range f.states { if state.TradeDate == date { out = append(out, state) } }; return out, nil }
+	out := make([]universe.SecurityDailyState, 0, len(f.securities))
+	for _, security := range f.securities { out = append(out, universe.SecurityDailyState{TradeDate: date, TsCode: security.TsCode, STType: universe.STNone, SuspendType: universe.SuspendNone, Source: "fixture", FetchedAt: marketdata.ShanghaiWallTime(2026, 10, 30, 14, 59)}) }
+	return out, nil
+}
+func (f *fakeRepository) CreateScanRun(_ context.Context, run Run, items []Item) error { return f.CreateScanRunWithExclusions(context.Background(), run, items, nil) }
+func (f *fakeRepository) CreateScanRunWithExclusions(_ context.Context, run Run, items []Item, exclusions []Exclusion) error {
+	f.run = run; f.items = append([]Item(nil), items...); f.exclusions = append([]Exclusion(nil), exclusions...); return nil
 }
 func (f *fakeRepository) UpdateScanRunItem(_ context.Context, item Item) error {
 	f.updated = append(f.updated, item)
@@ -192,4 +208,31 @@ func TestRunRejectsDuplicateNonActiveAndNonStockPoolEntries(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunExcludesSTSuspendedAndMissingDailyStateBeforeEvaluation(t *testing.T) {
+	asOf := marketdata.ShanghaiWallTime(2026, 10, 30, 15, 1)
+	securities := []universe.StockBasic{stock("000001.SZ", "ST样本"), stock("600519.SH", "停牌样本"), stock("600000.SH", "缺失状态"), stock("000002.SZ", "正常样本")}
+	repo := &fakeRepository{securities: securities, states: []universe.SecurityDailyState{
+		{TradeDate:"2026-10-30", TsCode:"000001.SZ", STType:universe.STStar, SuspendType:universe.SuspendNone, Source:"fixture", FetchedAt:marketdata.ShanghaiWallTime(2026,10,30,14,59)},
+		{TradeDate:"2026-10-30", TsCode:"600519.SH", STType:universe.STNone, SuspendType:universe.SuspendFull, Source:"fixture", FetchedAt:marketdata.ShanghaiWallTime(2026,10,30,14,59)},
+		{TradeDate:"2026-10-30", TsCode:"000002.SZ", STType:universe.STNone, SuspendType:universe.SuspendNone, Source:"fixture", FetchedAt:marketdata.ShanghaiWallTime(2026,10,30,14,59)},
+	}}
+	evaluator := &fakeEvaluator{result: map[string]appstrategy.Result{"000002.SZ": validResult("000002.SZ", asOf, contract.StatusWatching)}}
+	s, err := New(repo, evaluator); if err != nil { t.Fatal(err) }
+	run, err := s.Run(context.Background(), asOf); if err != nil { t.Fatal(err) }
+	if run.Status != RunCompleted || run.TotalCount != 4 || run.ExcludedCount != 3 || run.SuccessCount != 1 { t.Fatalf("资格过滤汇总错误: %+v", run) }
+	if len(evaluator.calls) != 1 || evaluator.calls[0] != "000002.SZ" { t.Fatalf("不合格证券进入了策略评估: %v", evaluator.calls) }
+	if len(repo.exclusions) != 3 { t.Fatalf("必须持久化三条排除记录: %+v", repo.exclusions) }
+	found := map[string]bool{}; for _, exclusion := range repo.exclusions { found[exclusion.TsCode] = true }
+	if !found["000001.SZ"] || !found["600519.SH"] || !found["600000.SH"] { t.Fatalf("排除审计缺少证券: %+v", repo.exclusions) }
+}
+
+func TestRunFailsClosedWhenTradingCalendarMissing(t *testing.T) {
+	asOf := marketdata.ShanghaiWallTime(2026, 10, 30, 15, 1)
+	repo := &fakeRepository{securities: []universe.StockBasic{stock("000001.SZ", "平安银行")}, calendarErr: errors.New("calendar missing")}
+	evaluator := &fakeEvaluator{}
+	s, err := New(repo, evaluator); if err != nil { t.Fatal(err) }
+	if _, err := s.Run(context.Background(), asOf); err == nil { t.Fatal("交易日历缺失必须 fail closed") }
+	if len(evaluator.calls) != 0 || repo.run.ID != "" { t.Fatal("交易日历缺失时不得创建扫描或执行策略") }
 }
