@@ -171,6 +171,27 @@ func (s *Service) EvaluateSymbol(ctx context.Context, tsCode string, asOf time.T
 			continue
 		}
 		input.Bars[frequency] = bars
+		if err := marketdata.ValidateBatch(bars); err != nil {
+			issues = append(issues, "BARS_"+string(frequency)+"_INVALID")
+		}
+		for _, bar := range bars {
+			if bar.TsCode != tsCode || bar.Frequency != frequency {
+				issues = append(issues, "BARS_"+string(frequency)+"_IDENTITY_MISMATCH")
+				break
+			}
+			if !bar.IsComplete {
+				issues = append(issues, "BARS_"+string(frequency)+"_FORMING_BAR")
+				break
+			}
+			if bar.BarTime.After(asOf) {
+				issues = append(issues, "BARS_"+string(frequency)+"_AFTER_AS_OF")
+				break
+			}
+			if bar.FetchedAt.After(asOf) {
+				issues = append(issues, "BARS_"+string(frequency)+"_FETCHED_AFTER_AS_OF")
+				break
+			}
+		}
 		expectedBarTime := expectedTimes[frequency]
 		if expectedBarTime.IsZero() {
 			issues = append(issues, "EXPECTED_BAR_TIME_"+string(frequency)+"_UNKNOWN")
@@ -179,9 +200,6 @@ func (s *Service) EvaluateSymbol(ctx context.Context, tsCode string, asOf time.T
 		latest := bars[len(bars)-1]
 		if !latest.BarTime.Equal(expectedBarTime) {
 			issues = append(issues, "BARS_"+string(frequency)+"_STALE")
-		}
-		if latest.FetchedAt.After(asOf) {
-			issues = append(issues, "BARS_"+string(frequency)+"_FETCHED_AFTER_AS_OF")
 		}
 	}
 	input.DataIssues = unique(issues)
