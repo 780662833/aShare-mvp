@@ -178,6 +178,19 @@ SQLite scan result read model 应：
 4. 校验 item 总数与 run 汇总状态一致，拒绝未知状态或汇总不一致；
 5. 不重新运行 CZSC 或策略，不从当前行情重建历史结论。
 
+### 7.1 历史策略决策查询（S5）
+
+历史决策查询直接读取 `strategy_decisions`，不重新执行策略，也不重建 payload。查询支持以下可选过滤条件：
+
+- `ts_code`：精确匹配证券代码；
+- `strategy_id`：精确匹配策略标识，缠论三买与趋势突破分别查询；
+- `status`：精确匹配决策状态；
+- `from_as_of`、`to_as_of`：决策时间范围，起止边界均包含。
+
+分页使用 `limit` 与从 0 开始的 `offset`；`limit` 必须在 1 到 200 之间。每页同时返回过滤后的总记录数。结果固定按 `as_of DESC, decision_id DESC` 排序，避免相同决策时点下排序不确定。查询在同一个只读事务中读取总数和当前页。
+
+查询结果反序列化并返回保存时的完整 `StrategyDecision`，包括策略/配置版本、状态、证据、原因码、参考价位、数据版本和 CZSC profile 信息。历史查询不改变原有 `SaveStrategyDecision` 的幂等写入和 DecisionID 冲突保护，也不改变 S4.3 基于原始 DecisionID 的扫描结果读取。
+
 ## 8. 文档、版本和变更治理
 
 涉及核心逻辑的修改必须遵循：
