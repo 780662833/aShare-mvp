@@ -345,6 +345,25 @@ func validateAnalyzeResponse(request AnalyzeRequest, result AnalyzeResponse) err
 		if offset != marketdata.ShanghaiOffsetSeconds || startedAt.After(asOf) {
 			return fmt.Errorf("CZSC 信号 %q 的 started_at 必须为不晚于 as_of 的 +08:00 时间", key)
 		}
+		startIndex := -1
+		for i, bar := range request.Bars {
+			barTime, parseErr := time.Parse(time.RFC3339Nano, bar.DT)
+			if parseErr != nil {
+				return fmt.Errorf("CZSC 请求 bars[%d].dt 无效: %w", i, parseErr)
+			}
+			if barTime.Equal(startedAt) {
+				startIndex = i
+				break
+			}
+		}
+		if startIndex < 0 {
+			return fmt.Errorf("CZSC 信号 %q 的 started_at 不属于本次请求 K 线序列", key)
+		}
+		expectedAge := len(request.Bars) - 1 - startIndex
+		if lifecycle.AgeBars != expectedAge {
+			return fmt.Errorf("CZSC 信号 %q 的 age_bars=%d 与请求 K 线序列位置不一致，期望 %d",
+				key, lifecycle.AgeBars, expectedAge)
+		}
 	}
 	return nil
 }
