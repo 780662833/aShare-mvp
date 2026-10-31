@@ -241,6 +241,8 @@ func (s *Service) EvaluateSymbol(ctx context.Context, tsCode string, asOf time.T
 		if err := s.analyzeFrequencies(ctx, input.Bars, input.Technical); err != nil {
 			result.DataVersion = input.DataVersion
 			result.MarketStatus = contract.MarketUnknown
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) { return result, err }
+			if ctx.Err() != nil { return result, ctx.Err() }
 			return s.saveAnalysisError(ctx, result, input, err)
 		}
 	}
@@ -253,6 +255,8 @@ func (s *Service) EvaluateSymbol(ctx context.Context, tsCode string, asOf time.T
 	evaluateAndSave := func(strategyID string, evaluate func(context.Context, contract.StrategyInput) (contract.StrategyDecision, error)) {
 		sr := StrategyResult{StrategyID: strategyID, StrategyStatus: "NOT_EVALUATED",
 			PersistenceStatus: "NOT_ATTEMPTED", AsOf: asOf, DataVersion: input.DataVersion}
+		if propagatedContextErr != nil { sr.ErrorMessage = propagatedContextErr.Error(); result.StrategyResults = append(result.StrategyResults, sr); return }
+		if ctx.Err() != nil { propagatedContextErr = ctx.Err(); sr.ErrorMessage = ctx.Err().Error(); result.StrategyResults = append(result.StrategyResults, sr); return }
 		strategyInput := input
 		strategyInput.PreviousDecision = nil
 		previous, previousErr := s.repo.GetLatestStrategyDecisionBefore(ctx, tsCode, strategyID, asOf)
@@ -287,6 +291,8 @@ func (s *Service) EvaluateSymbol(ctx context.Context, tsCode string, asOf time.T
 	}
 	evaluateAndSave(chan3buy.StrategyID, s.chanStrategy.Evaluate)
 	evaluateAndSave(trendbreakout.StrategyID, s.trendStrategy.Evaluate)
+	if propagatedContextErr != nil { return result, propagatedContextErr }
+	if err := ctx.Err(); err != nil { return result, err }
 	return result, nil
 }
 
