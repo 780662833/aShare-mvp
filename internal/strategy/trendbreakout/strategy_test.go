@@ -20,6 +20,9 @@ func trendConfig() Config {
 		MinAmount: 100000,
 		MinClosePosition: 0.5,
 		MaxChaseAboveBreakoutPct: 5,
+		M30RetestTolerancePct: 0.5,
+		M30RetestLookbackBars: 6,
+		M30MinRetestClosePosition: 0.6,
 		MinM60ClosesAboveBreakout: 1,
 		M60FailureConfirmBars: 2,
 		MaxSignalAgeDays: 4,
@@ -54,7 +57,8 @@ func trendInput() contract.StrategyInput {
 		trendBar(marketdata.FrequencyM60, marketdata.ShanghaiWallTime(2026, 11, 2, 11, 30), 114.8, 115.2, 114.2, 550),
 	}
 	m30 := []marketdata.Bar{
-		trendBar(marketdata.FrequencyM30, marketdata.ShanghaiWallTime(2026, 11, 2, 13, 0), 115.6, 115.9, 114.9, 250),
+		trendBar(marketdata.FrequencyM30, marketdata.ShanghaiWallTime(2026, 11, 2, 12, 0), 114.0, 114.2, 113.4, 250),
+		trendBar(marketdata.FrequencyM30, marketdata.ShanghaiWallTime(2026, 11, 2, 12, 30), 114.5, 114.8, 114.0, 280),
 	}
 	return contract.StrategyInput{
 		Security: universe.StockBasic{
@@ -124,6 +128,87 @@ func TestEvaluateReturnsBuyObservationWhenAllConditionsPass(t *testing.T) {
 	if len(decision.ReferenceLevels) != 1 || decision.ReferenceLevels[0].Code != "BREAKOUT_LEVEL" {
 		t.Fatalf("应输出可追溯的突破位: %+v", decision.ReferenceLevels)
 	}
+}
+
+func TestEvaluateWaitsWhenM30RetestIsMissing(t *testing.T) {
+	strategy, err := New(trendConfig())
+	if err != nil { t.Fatal(err) }
+	input := trendInput()
+	bars := input.Bars[marketdata.FrequencyM30]
+	bars[0].Low = 114.0
+	input.Bars[marketdata.FrequencyM30] = bars
+	decision, err := strategy.Evaluate(context.Background(), input)
+	if err != nil { t.Fatal(err) }
+	if decision.Status != contract.StatusWaitEntry || !hasReason(decision, "M30_BREAKOUT_RETEST_NOT_FOUND") {
+		t.Fatalf("没有回踩突破位时必须等待: %+v", decision)
+	}
+}
+
+func TestEvaluateRequiresM30CloseToReclaimBreakoutAndBreakPriorHigh(t *testing.T) {
+	strategy, err := New(trendConfig())
+	if err != nil { t.Fatal(err) }
+	input := trendInput()
+	bars := input.Bars[marketdata.FrequencyM30]
+	bars[1].Close = 113.0
+	bars[1].High = 114.0
+	input.Bars[marketdata.FrequencyM30] = bars
+	decision, err := strategy.Evaluate(context.Background(), input)
+	if err != nil { t.Fatal(err) }
+	if decision.Status != contract.StatusWaitEntry || !hasReason(decision, "M30_RETEST_NOT_RECLAIMED") {
+		t.Fatalf("收盘未站回突破位必须等待: %+v", decision)
+	}
+
+	input = trendInput()
+	bars = input.Bars[marketdata.FrequencyM30]
+	bars[1].Close = 114.1
+	bars[1].High = 114.4
+	input.Bars[marketdata.FrequencyM30] = bars
+	decision, err = strategy.Evaluate(context.Background(), input)
+	if err != nil { t.Fatal(err) }
+	if decision.Status != contract.StatusWaitEntry || !hasReason(decision, "M30_RETEST_STRENGTH_NOT_CONFIRMED") {
+		t.Fatalf("收盘未突破前一根 M30 高点必须等待: %+v", decision)
+	}
+}
+
+func TestEvaluateRequiresConfiguredM30RetestClosePosition(t *testing.T) {
+	config := trendConfig()
+	config.M30MinRetestClosePosition = 0.9
+	strategy, err := New(config)
+	if err != nil { t.Fatal(err) }
+	decision, err := strategy.Evaluate(context.Background(), trendInput())
+	if err != nil { t.Fatal(err) }
+	if decision.Status != contract.StatusWaitEntry || !hasReason(decision, "M30_RETEST_CLOSE_POSITION_INSUFFICIENT") {
+		t.Fatalf("转强 K 线收盘位置不足必须等待: %+v", decision)
+	}
+}
+
+func TestEvaluateRequiresM30RetestAfterM60Hold(t *testing.T) {
+	strategy, err := New(trendConfig())
+	if err != nil { t.Fatal(err) }
+	input := trendInput()
+	bars := input.Bars[marketdata.FrequencyM30]
+	bars[0].BarTime = marketdata.ShanghaiWallTime(2026, 11, 2, 11, 0)
+	bars[1].BarTime = marketdata.ShanghaiWallTime(2026, 11, 2, 11, 30)
+	bars[0].FetchedAt = bars[0].BarTime.Add(30*time.Minute)
+	bars[1].FetchedAt = bars[1].BarTime.Add(30*time.Minute)
+	input.Bars[marketdata.FrequencyM30] = bars
+	decision, err := strategy.Evaluate(context.Background(), input)
+	if err != nil { t.Fatal(err) }
+	if decision.Status != contract.StatusWaitEntry || !hasReason(decision, "M30_NOT_AFTER_M60_CONFIRMATION") {
+		t.Fatalf("M30 必须晚于 M60 站稳确认: %+v", decision)
+	}
+}
+
+func TestNewRejectsMissingM30RetestConfiguration(t *testing.T) {
+	config := trendConfig()
+	config.M30RetestTolerancePct = 0
+	if _, err := New(config); err == nil { t.Fatal("必须显式配置 M30 回踩容忍度") }
+	config = trendConfig()
+	config.M30RetestLookbackBars = 1
+	if _, err := New(config); err == nil { t.Fatal("回踩窗口必须至少为两根完整 M30 K 线") }
+	config = trendConfig()
+	config.M30MinRetestClosePosition = 1.1
+	if _, err := New(config); err == nil { t.Fatal("转强收盘位置必须在 [0,1]") }
 }
 
 func TestEvaluateDoesNotConfirmIntradayOrNonClosingBreakout(t *testing.T) {
