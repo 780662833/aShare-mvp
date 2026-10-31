@@ -305,6 +305,25 @@ func TestEvaluateSymbolOrchestratesThreeCZSCProfilesAndTwoIndependentStrategies(
 }
 
 
+func TestExpectedBarTimesRejectsCalendarFetchedAfterAsOf(t *testing.T) {
+	repo := validRepository()
+	day := repo.days["2026-10-30"]
+	day.FetchedAt = marketdata.ShanghaiWallTime(2026, 10, 30, 11, 2)
+	repo.days["2026-10-30"] = day
+	asOf := marketdata.ShanghaiWallTime(2026, 10, 30, 11, 1)
+	_, _, issues := expectedBarTimes(context.Background(), repo, calendar.SSE, asOf)
+	found := false
+	for _, issue := range issues {
+		if issue == "AS_OF_TRADING_CALENDAR_AFTER_AS_OF" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("不能使用 as_of 之后才获取的交易日历: %v", issues)
+	}
+}
+
 func TestExpectedBarTimesRejectsMissingPreviousCalendarDate(t *testing.T) {
 	repo := validRepository()
 	delete(repo.days, "2026-10-29")
