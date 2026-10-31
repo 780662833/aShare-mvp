@@ -38,6 +38,7 @@ type Run struct {
 	DataIncompleteCount int
 	AnalysisErrorCount  int
 	FailedCount         int
+	ExcludedCount       int
 	ErrorMessage        string
 }
 
@@ -49,6 +50,15 @@ type StrategyResult struct {
 	AsOf time.Time `json:"as_of"`
 	DataVersion string `json:"data_version"`
 	ErrorMessage string `json:"error_message,omitempty"`
+}
+
+type Exclusion struct {
+	ScanID       string
+	TsCode       string
+	SecurityName string
+	Exchange     universe.Exchange
+	TradeDate    string
+	ReasonCodes  []string
 }
 
 type Item struct {
