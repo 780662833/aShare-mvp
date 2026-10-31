@@ -128,6 +128,23 @@ func validConfig() Config {
 	}
 }
 
+func TestEvaluateSymbolRejectsSTAndSuspendedSecuritiesBeforeCZSC(t *testing.T) {
+	for name, mutate := range map[string]func(*fakeRepository){
+		"st": func(repo *fakeRepository) { repo.state.STType = universe.STStar },
+		"suspended": func(repo *fakeRepository) { repo.state.SuspendType = universe.SuspendFull },
+		"unknown-st": func(repo *fakeRepository) { repo.state.STType = universe.STUnknown },
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo := validRepository(); mutate(repo)
+			analyzer := &fakeAnalyzer{}
+			service, err := New(repo, analyzer, validConfig()); if err != nil { t.Fatal(err) }
+			asOf := marketdata.ShanghaiWallTime(2026, 10, 30, 11, 1)
+			if _, err := service.EvaluateSymbol(context.Background(), "600519.SH", asOf); err == nil { t.Fatal("不合格证券必须拒绝评估") }
+			if analyzer.calls != 0 || len(repo.saved) != 0 { t.Fatalf("不合格证券不得进入 CZSC 或保存决策: calls=%d saved=%d", analyzer.calls, len(repo.saved)) }
+		})
+	}
+}
+
 func TestExpectedBarTimesPreserveM30AfterM60OrderingIntraday(t *testing.T) {
 	repo := validRepository()
 	asOf := marketdata.ShanghaiWallTime(2026, 10, 30, 11, 1)

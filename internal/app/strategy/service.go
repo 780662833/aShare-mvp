@@ -129,9 +129,8 @@ func (s *Service) EvaluateSymbol(ctx context.Context, tsCode string, asOf time.T
 	if err != nil {
 		return result, fmt.Errorf("读取证券基础资料 %s 失败: %w", tsCode, err)
 	}
-	if err := security.Validate(); err != nil {
-		return result, fmt.Errorf("证券基础资料无效: %w", err)
-	}
+	if err := security.Validate(); err != nil { return result, fmt.Errorf("证券基础资料无效: %w", err) }
+	if security.ListStatus != universe.ListingActive { return result, fmt.Errorf("SECURITY_INELIGIBLE: 证券 %s 非明确上市状态 %s", tsCode, security.ListStatus) }
 
 	input := contract.StrategyInput{
 		Security: security,
@@ -148,7 +147,6 @@ func (s *Service) EvaluateSymbol(ctx context.Context, tsCode string, asOf time.T
 		ctx, s.repo, calendar.Exchange(security.Exchange), asOf,
 	)
 	issues = append(issues, calendarIssues...)
-	if err := ctx.Err(); err != nil { return result, err }
 
 	if stateDate != "" {
 		state, stateErr := s.repo.GetSecurityDailyState(ctx, tsCode, stateDate)
@@ -156,6 +154,10 @@ func (s *Service) EvaluateSymbol(ctx context.Context, tsCode string, asOf time.T
 			issues = append(issues, "SECURITY_DAILY_STATE_MISSING")
 		} else {
 			input.DailyState = state
+			if state.TradeDate == stateDate && !state.FetchedAt.After(asOf) {
+				if state.STType != universe.STNone { return result, fmt.Errorf("SECURITY_INELIGIBLE: 证券 %s ST 状态为 %s", tsCode, state.STType) }
+				if state.SuspendType != universe.SuspendNone { return result, fmt.Errorf("SECURITY_INELIGIBLE: 证券 %s 停牌状态为 %s", tsCode, state.SuspendType) }
+			}
 			if state.TradeDate != stateDate {
 				issues = append(issues, "SECURITY_DAILY_STATE_STALE")
 			}
@@ -176,7 +178,6 @@ func (s *Service) EvaluateSymbol(ctx context.Context, tsCode string, asOf time.T
 	var canonicalAdjust marketdata.AdjustMode
 	hasCanonicalSeries := false
 	for _, frequency := range frequencies {
-		if err := ctx.Err(); err != nil { return result, err }
 		bars, readErr := s.repo.ListRecentBars(ctx, tsCode, frequency, s.config.AdjustMode, asOf, s.config.HistoryBars)
 		if readErr != nil {
 			issues = append(issues, "BARS_"+string(frequency)+"_READ_FAILED")
@@ -239,7 +240,6 @@ func (s *Service) EvaluateSymbol(ctx context.Context, tsCode string, asOf time.T
 		if err := s.analyzeFrequencies(ctx, input.Bars, input.Technical); err != nil {
 			result.DataVersion = input.DataVersion
 			result.MarketStatus = contract.MarketUnknown
-			if ctx.Err() != nil { return result, ctx.Err() }
 			return s.saveAnalysisError(ctx, result, input, err)
 		}
 	}
@@ -251,7 +251,6 @@ func (s *Service) EvaluateSymbol(ctx context.Context, tsCode string, asOf time.T
 	evaluateAndSave := func(strategyID string, evaluate func(context.Context, contract.StrategyInput) (contract.StrategyDecision, error)) {
 		sr := StrategyResult{StrategyID: strategyID, StrategyStatus: "NOT_EVALUATED",
 			PersistenceStatus: "NOT_ATTEMPTED", AsOf: asOf, DataVersion: input.DataVersion}
-		if ctx.Err() != nil { sr.ErrorMessage = ctx.Err().Error(); result.StrategyResults = append(result.StrategyResults, sr); return }
 		strategyInput := input
 		strategyInput.PreviousDecision = nil
 		previous, previousErr := s.repo.GetLatestStrategyDecisionBefore(ctx, tsCode, strategyID, asOf)
@@ -284,7 +283,6 @@ func (s *Service) EvaluateSymbol(ctx context.Context, tsCode string, asOf time.T
 	}
 	evaluateAndSave(chan3buy.StrategyID, s.chanStrategy.Evaluate)
 	evaluateAndSave(trendbreakout.StrategyID, s.trendStrategy.Evaluate)
-	if err := ctx.Err(); err != nil { return result, err }
 	return result, nil
 }
 
