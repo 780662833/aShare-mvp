@@ -45,12 +45,23 @@ S5 通过 PR [#6](https://github.com/780662833/aShare-mvp/pull/6) 合并到 `mai
 
 ## 本地运行
 
-需要 Go 1.27.2 或更高版本。
+需要 Go 1.27.2 或更高版本。当前提供 CLI 串联已有行情适配、单股评估、扫描、扫描结果读取和历史决策查询。完整步骤与参考数据格式见 [CLI 实际运行说明](docs/implementation/08-runtime-cli.md)。
 
-```bash
-go test ./...
-go run ./cmd/ashare-mvp -db ./data/ashare.db
+```powershell
+go test ./... -count=1
+go run ./cmd/ashare-mvp init
+go run ./cmd/ashare-mvp help
 ```
+
+策略配置模板：复制 `configs/runtime.example.json` 为本地配置文件。模板阈值只是配置格式演示，不是经过回测/实盘验证的推荐参数，运行前必须由使用者确认并修改配置版本。gotdx 不提供本项目所需的交易日历和逐日 ST/停牌状态，这些参考数据必须从可信来源导入；证券状态为 UNKNOWN 的记录不会进入扫描池。
+
+**运行链路仍有三项待开发事项（尚未实现）：**
+
+1. **证券状态数据与扫描资格过滤**：补齐可信交易日历、逐日 ST/停牌状态 Provider，并在扫描前自动排除 ST/*ST、停牌及状态缺失/过期证券。
+2. **Context 取消/超时传播**：确保取消和 deadline 超时沿 CLI、扫描、评估及 Provider 调用链正确传播和留痕。
+3. **决策持久化错误分类**：策略计算成功但决策写库失败时，准确归类为存储失败，不误报为策略分析失败。
+
+以上事项的详细现状、开发范围和验收要求见 [CLI 实际运行说明 §7](docs/implementation/08-runtime-cli.md)。三项完成并验收前，不应将当前 CLI 视为具备完整风险过滤的生产级全市场扫描入口。
 
 CZSC 服务：
 
