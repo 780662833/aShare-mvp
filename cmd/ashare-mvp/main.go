@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	tdxtypes "github.com/bensema/gotdx/types"
+
 	appstrategy "github.com/780662833/aShare-mvp/internal/app/strategy"
 	"github.com/780662833/aShare-mvp/internal/czscclient"
 	gotdxadapter "github.com/780662833/aShare-mvp/internal/datahub/gotdx"
@@ -92,12 +94,16 @@ CZSC Python 服务需单独启动。策略参数必须通过 runtime.json 显式
 func withStore(name string, args []string, configure func(*flag.FlagSet) error, action func(context.Context, *sqlitestore.Store) error) error {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	dbPath := fs.String("db", filepath.Join("data", "ashare.db"), "SQLite 数据库路径")
+	timeout := fs.Duration("timeout", 0, "命令超时，例如 15m；0 表示不设置超时")
 	if err := configure(fs); err != nil { return err }
 	if err := fs.Parse(args); err != nil { return err }
+	if *timeout < 0 { return errors.New("--timeout 不能为负数") }
 	if fs.NArg() != 0 { return fmt.Errorf("存在未识别的位置参数: %v", fs.Args()) }
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	baseCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	ctx := baseCtx
+	if *timeout > 0 { var cancel context.CancelFunc; ctx, cancel = context.WithTimeout(baseCtx, *timeout); defer cancel() }
 	if err := os.MkdirAll(filepath.Dir(*dbPath), 0o755); err != nil {
 		return fmt.Errorf("创建数据库目录失败: %w", err)
 	}
@@ -136,42 +142,72 @@ func runSyncUniverse(args []string) error {
 func runSyncBars(args []string) error {
 	var code, freq string
 	var count int
+	var all bool
 	return withStore("sync-bars", args, func(fs *flag.FlagSet) error {
 		fs.StringVar(&code, "ts-code", "", "证券代码，例如 600519.SH")
-		fs.IntVar(&count, "count", 250, "获取 K 线数量（1-5000）")
+		fs.BoolVar(&all, "all", false, "同步当前明确标记为 ACTIVE 的全部普通 A 股")
+		fs.IntVar(&count, "count", 250, "每个周期获取 K 线数量（1-5000）")
 		fs.StringVar(&freq, "freq", "all", "周期：all、D1、M60 或 M30")
 		return nil
 	}, func(ctx context.Context, store *sqlitestore.Store) error {
-		if strings.TrimSpace(code) == "" || count < 1 || count > 5000 {
-			return errors.New("--ts-code 必填，--count 必须在 1-5000")
-		}
+		code = strings.TrimSpace(code)
+		if all == (code != "") { return errors.New("必须且只能指定 --ts-code 或 --all") }
+		if count < 1 || count > 5000 { return errors.New("--count 必须在 1-5000") }
 		frequencies := []marketdata.Frequency{marketdata.FrequencyD1, marketdata.FrequencyM60, marketdata.FrequencyM30}
 		if freq != "all" {
 			f := marketdata.Frequency(freq)
 			if !f.Valid() { return fmt.Errorf("不支持的周期 %q", freq) }
 			frequencies = []marketdata.Frequency{f}
 		}
+		targets := []string{code}
+		if all {
+			securities, err := store.ListActiveStockBasics(ctx)
+			if err != nil { return fmt.Errorf("读取 ACTIVE 证券池失败: %w", err) }
+			targets = make([]string, 0, len(securities))
+			for _, security := range securities {
+				if tdxtypes.IsStock(security.TsCode) && !tdxtypes.IsETF(security.TsCode) && !tdxtypes.IsIndex(security.TsCode) {
+					targets = append(targets, security.TsCode)
+				}
+			}
+			if len(targets) == 0 { return errors.New("ACTIVE 普通 A 股股票池为空；请先导入经核验的证券主数据") }
+		}
 		adapter := gotdxadapter.New(gotdxadapter.Config{})
 		defer adapter.Close()
-		type summary struct {
-			Frequency marketdata.Frequency `json:"frequency"`
-			Count int `json:"count"`
+		type symbolResult struct {
+			TsCode string "json:\"ts_code\""
+			Counts map[marketdata.Frequency]int "json:\"counts,omitempty\""
+			Error string "json:\"error,omitempty\""
 		}
-		batches := make([][]marketdata.Bar, 0, len(frequencies))
-		output := make([]summary, 0, len(frequencies))
-		for _, frequency := range frequencies {
-			bars, err := adapter.FetchBars(ctx, code, frequency, uint16(count))
-			if err != nil { return err }
-			if len(bars) == 0 { return fmt.Errorf("%s 未返回 %s K 线", code, frequency) }
-			batches = append(batches, bars)
-			output = append(output, summary{Frequency: frequency, Count: len(bars)})
+		type syncSummary struct {
+			Requested int "json:\"requested\""
+			Succeeded int "json:\"succeeded\""
+			Failed int "json:\"failed\""
+			Results []symbolResult "json:\"results\""
 		}
-		for _, bars := range batches {
-			if err := store.UpsertBars(ctx, bars); err != nil {
-				return fmt.Errorf("写入 %s %s K 线失败: %w", bars[0].TsCode, bars[0].Frequency, err)
+		summary := syncSummary{Requested: len(targets), Results: make([]symbolResult, 0, len(targets))}
+		for _, target := range targets {
+			if err := ctx.Err(); err != nil { break }
+			result := symbolResult{TsCode: target, Counts: make(map[marketdata.Frequency]int)}
+			batches := make([][]marketdata.Bar, 0, len(frequencies))
+			for _, frequency := range frequencies {
+				bars, err := adapter.FetchBars(ctx, target, frequency, uint16(count))
+				if err != nil { result.Error = fmt.Sprintf("获取 %s K 线失败: %v", frequency, err); break }
+				if len(bars) == 0 { result.Error = fmt.Sprintf("%s 未返回 %s K 线", target, frequency); break }
+				batches = append(batches, bars)
+				result.Counts[frequency] = len(bars)
 			}
+			if result.Error == "" {
+				for _, bars := range batches {
+					if err := store.UpsertBars(ctx, bars); err != nil { result.Error = fmt.Sprintf("写入 %s %s K 线失败: %v", target, bars[0].Frequency, err); break }
+				}
+			}
+			if result.Error == "" { summary.Succeeded++ } else { summary.Failed++ }
+			summary.Results = append(summary.Results, result)
 		}
-		return writeJSON(os.Stdout, output)
+		if err := writeJSON(os.Stdout, summary); err != nil { return err }
+		if err := ctx.Err(); err != nil { return err }
+		if summary.Failed > 0 { return fmt.Errorf("sync-bars 完成但有 %d/%d 只证券失败；请根据 results 检查并重试", summary.Failed, summary.Requested) }
+		return nil
 	})
 }
 
