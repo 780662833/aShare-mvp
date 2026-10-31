@@ -364,6 +364,9 @@ func expectedBarTimes(
 	if err != nil {
 		return expected, "", []string{"AS_OF_TRADING_CALENDAR_UNKNOWN"}
 	}
+	if day.FetchedAt.IsZero() || day.FetchedAt.After(asOf) {
+		issues = append(issues, "AS_OF_TRADING_CALENDAR_AFTER_AS_OF")
+	}
 
 	var stateDate string
 	var previousOpen calendar.TradeDay
@@ -372,14 +375,16 @@ func expectedBarTimes(
 		currentOpen, currentErr := repo.GetLatestOpenTradeDay(ctx, exchange, date)
 		if currentErr != nil || currentOpen.CalDate != date {
 			issues = append(issues, "LATEST_OPEN_TRADE_DAY_UNKNOWN")
+		} else if currentOpen.FetchedAt.IsZero() || currentOpen.FetchedAt.After(asOf) {
+			issues = append(issues, "LATEST_OPEN_TRADE_DAY_AFTER_AS_OF")
 		}
 
-		previousOpen, err = findPreviousKnownOpenDay(ctx, repo, exchange, date)
+		previousOpen, err = findPreviousKnownOpenDay(ctx, repo, exchange, date, asOf)
 		if err != nil {
 			issues = append(issues, "PREVIOUS_TRADING_CALENDAR_UNKNOWN")
 		}
 	} else {
-		previousOpen, err = findPreviousKnownOpenDay(ctx, repo, exchange, date)
+		previousOpen, err = findPreviousKnownOpenDay(ctx, repo, exchange, date, asOf)
 		if err != nil {
 			issues = append(issues, "LATEST_OPEN_TRADE_DAY_UNKNOWN")
 			return expected, "", issues
@@ -392,6 +397,8 @@ func expectedBarTimes(
 		indexedPreviousOpen, indexedErr := repo.GetLatestOpenTradeDay(ctx, exchange, previousDate)
 		if indexedErr != nil || indexedPreviousOpen.CalDate != previousOpen.CalDate {
 			issues = append(issues, "TRADING_CALENDAR_INDEX_MISMATCH")
+		} else if indexedPreviousOpen.FetchedAt.IsZero() || indexedPreviousOpen.FetchedAt.After(asOf) {
+			issues = append(issues, "TRADING_CALENDAR_INDEX_AFTER_AS_OF")
 		}
 	}
 
@@ -440,6 +447,7 @@ func findPreviousKnownOpenDay(
 	repo Repository,
 	exchange calendar.Exchange,
 	beforeDate string,
+	asOf time.Time,
 ) (calendar.TradeDay, error) {
 	day, err := time.ParseInLocation("2006-01-02", beforeDate, marketdata.ShanghaiLocation())
 	if err != nil {
@@ -451,6 +459,9 @@ func findPreviousKnownOpenDay(
 		record, err := repo.GetTradeDay(ctx, exchange, date)
 		if err != nil {
 			return calendar.TradeDay{}, fmt.Errorf("交易日历缺少 %s: %w", date, err)
+		}
+		if record.FetchedAt.IsZero() || record.FetchedAt.After(asOf) {
+			return calendar.TradeDay{}, fmt.Errorf("交易日历 %s 的记录在 as_of 时点尚不可用", date)
 		}
 		if record.IsOpen {
 			return record, nil
