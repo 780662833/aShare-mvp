@@ -150,6 +150,64 @@ func TestExpectedBarTimesPreserveM30AfterM60OrderingIntraday(t *testing.T) {
 	}
 }
 
+func TestEvaluateSymbolRejectsCrossFrequencyMismatchBeforeCZSC(t *testing.T) {
+	repo := validRepository()
+	asOf := marketdata.ShanghaiWallTime(2026, 10, 30, 11, 1)
+	fetchedAt := marketdata.ShanghaiWallTime(2026, 10, 30, 10, 59)
+
+	daily := make([]marketdata.Bar, 0, 64)
+	start := marketdata.ShanghaiWallTime(2026, 8, 27, 15, 0)
+	for i := 0; i < 64; i++ {
+		daily = append(daily, completeFixtureBar(
+			marketdata.FrequencyD1, start.AddDate(0, 0, i), fetchedAt, 100+float64(i)*0.15,
+		))
+	}
+	repo.bars[marketdata.FrequencyD1] = daily
+	repo.bars[marketdata.FrequencyM60] = []marketdata.Bar{
+		completeFixtureBar(
+			marketdata.FrequencyM60,
+			marketdata.ShanghaiWallTime(2026, 10, 30, 10, 30), fetchedAt, 110,
+		),
+	}
+	m30 := completeFixtureBar(
+		marketdata.FrequencyM30,
+		marketdata.ShanghaiWallTime(2026, 10, 30, 11, 0), fetchedAt, 110.2,
+	)
+	m30.Source = "alternate-provider"
+	repo.bars[marketdata.FrequencyM30] = []marketdata.Bar{m30}
+
+	analyzer := &fakeAnalyzer{}
+	service, err := New(repo, analyzer, validConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.EvaluateSymbol(context.Background(), "600519.SH", asOf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if analyzer.calls != 0 {
+		t.Fatalf("跨周期数据源不一致时不应调用 CZSC；调用次数=%d", analyzer.calls)
+	}
+	if len(result.Decisions) != 2 {
+		t.Fatalf("应返回两条 DATA_INCOMPLETE 决策，得到 %d", len(result.Decisions))
+	}
+	for _, decision := range result.Decisions {
+		if decision.Status != contract.StatusDataIncomplete {
+			t.Errorf("%s 应为 DATA_INCOMPLETE，得到 %s", decision.StrategyID, decision.Status)
+		}
+		found := false
+		for _, code := range decision.ReasonCodes {
+			if code == "CROSS_FREQUENCY_SOURCE_MISMATCH" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("%s 缺少跨周期来源冲突原因码：%v", decision.StrategyID, decision.ReasonCodes)
+		}
+	}
+}
+
 func TestEvaluateSymbolRejectsHistoricalBarFetchedAfterAsOfBeforeCZSC(t *testing.T) {
 	repo := validRepository()
 	asOf := marketdata.ShanghaiWallTime(2026, 10, 30, 11, 1)
