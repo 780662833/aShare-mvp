@@ -96,7 +96,7 @@ func (s *Store) CompleteScanRun(ctx context.Context, run scanmodel.Run) error {
 	case scanmodel.RunPartial:
 		if run.SuccessCount == 0 || processed != eligibleCount { return fmt.Errorf("PARTIAL_SUCCESS 扫描必须有成功项且所有合格证券均已处理") }
 	case scanmodel.RunFailed:
-		if run.SuccessCount != 0 || eligibleCount == 0 || processed != eligibleCount { return fmt.Errorf("FAILED 扫描必须存在合格证券、无成功项且所有合格证券均已处理") }
+		if run.SuccessCount != 0 || (eligibleCount == 0 && run.TotalCount != 0) || processed != eligibleCount { return fmt.Errorf("FAILED 扫描必须存在合格证券、无成功项且所有合格证券均已处理") }
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
