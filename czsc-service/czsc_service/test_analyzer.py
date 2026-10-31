@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from czsc_service.analyzer import (
     SIGNAL_PROFILES,
     _czsc_wall_time,
+    _czsc_signal_market_iso,
     _market_iso,
     _signal_lifecycles,
     validate_payload,
@@ -72,6 +73,38 @@ class ValidatePayloadTests(unittest.TestCase):
         payload["bars"][0]["high"] = 98
         with self.assertRaises(ValueError):
             validate_payload(payload)
+
+    def test_czsc_signal_market_iso_preserves_naive_market_wall_time(self):
+        value = datetime(2026, 10, 30, 9, 30)
+        self.assertEqual(
+            _czsc_signal_market_iso(value),
+            "2026-10-30T09:30:00+08:00",
+        )
+
+    def test_czsc_signal_market_iso_relabels_utc_encoded_time_without_shifting(self):
+        value = datetime(2026, 10, 30, 9, 30, tzinfo=timezone.utc)
+        self.assertEqual(
+            _czsc_signal_market_iso(value),
+            "2026-10-30T09:30:00+08:00",
+        )
+        self.assertEqual(
+            _czsc_signal_market_iso("2026-10-30T09:30:00Z"),
+            "2026-10-30T09:30:00+08:00",
+        )
+
+    def test_czsc_signal_market_iso_keeps_shanghai_offset(self):
+        value = datetime.fromisoformat("2026-10-30T09:30:00+08:00")
+        self.assertEqual(
+            _czsc_signal_market_iso(value),
+            "2026-10-30T09:30:00+08:00",
+        )
+
+    def test_czsc_signal_market_iso_rejects_other_nonzero_offsets(self):
+        value = datetime.fromisoformat("2026-10-30T09:30:00+05:30")
+        with self.assertRaises(ValueError):
+            _czsc_signal_market_iso(value)
+        with self.assertRaises(ValueError):
+            _czsc_signal_market_iso("not-a-timestamp")
 
     def test_market_iso_rejects_non_shanghai_aware_datetime(self):
         wrong = datetime(2026, 10, 30, 1, 30, tzinfo=timezone.utc)
