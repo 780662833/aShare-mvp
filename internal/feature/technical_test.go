@@ -43,6 +43,21 @@ func TestPreviousRangeHighExcludesCurrentBar(t *testing.T) {
 	}
 }
 
+func TestPreviousRangeHighIncludesOldestPriorBarAndExcludesBarsOutsideWindow(t *testing.T) {
+	bars := []marketdata.Bar{
+		featureBar(0, 100, 90, 95, 100), // 超出窗口的旧高点
+		featureBar(1, 11, 9, 10, 100),
+		featureBar(2, 15, 10, 14, 100), // N 根窗口最老边界，必须纳入
+		featureBar(3, 12, 10, 11, 100),
+		featureBar(4, 99, 10, 98, 100), // 当前 K 线，不得纳入
+	}
+	high, err := PreviousRangeHigh(bars, 3)
+	if err != nil { t.Fatal(err) }
+	if high != 15 {
+		t.Fatalf("必须纳入 N 根窗口最老 K 线、排除窗口外旧高和当前 K 线，得到 %v", high)
+	}
+}
+
 func TestVolumeRatioUsesOnlyPreviousBarsForBaseline(t *testing.T) {
 	bars := []marketdata.Bar{
 		featureBar(0, 11, 9, 10, 100),
