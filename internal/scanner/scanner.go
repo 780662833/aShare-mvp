@@ -78,6 +78,16 @@ func New(repo Repository, evaluator Evaluator) (*Scanner, error) {
 // Run 在开始时冻结当前活动普通 A 股股票池和 as_of，按 ts_code 顺序逐只复用单股评估服务。
 // 本方法只支持当前股票池快照，不提供历史日期的完整上市证券池重建。
 func (s *Scanner) Run(ctx context.Context, asOf time.Time) (Run, error) {
+	id, err := newScanID()
+	if err != nil { return Run{}, fmt.Errorf("生成 scan_id 失败: %w", err) }
+	return s.RunWithID(ctx, asOf, id, nil)
+}
+
+// NewScanID 生成可由 API 在异步任务启动前返回给客户端的扫描标识。
+func NewScanID() (string, error) { return newScanID() }
+
+// RunWithID 使用调用方生成的 ScanID 执行扫描；onStarted 在快照持久化后同步调用。
+func (s *Scanner) RunWithID(ctx context.Context, asOf time.Time, id string, onStarted func(Run) error) (Run, error) {
 	if err := ctx.Err(); err != nil {
 		return Run{}, err
 	}
@@ -112,9 +122,8 @@ func (s *Scanner) Run(ctx context.Context, asOf time.Time) (Run, error) {
 
 	eligible, exclusions, err := s.filterEligibleSecurities(ctx, securities, asOf)
 	if err != nil { return Run{}, fmt.Errorf("扫描股票池资格检查失败: %w", err) }
+	if strings.TrimSpace(id) == "" { return Run{}, fmt.Errorf("scan_id 不能为空") }
 	startedAt := s.now().In(marketdata.ShanghaiLocation())
-	id, err := newScanID()
-	if err != nil { return Run{}, fmt.Errorf("生成 scan_id 失败: %w", err) }
 	run := Run{ID: id, AsOf: asOf, StartedAt: startedAt, Status: RunRunning, TotalCount: len(securities), ExcludedCount: len(exclusions)}
 	items := make([]Item, 0, len(eligible))
 	for _, security := range eligible {
@@ -126,6 +135,7 @@ func (s *Scanner) Run(ctx context.Context, asOf time.Time) (Run, error) {
 	if err := s.repo.CreateScanRunWithExclusions(ctx, run, items, exclusions); err != nil {
 		return Run{}, fmt.Errorf("创建扫描运行记录失败: %w", err)
 	}
+	if onStarted != nil { if err := onStarted(run); err != nil { return run, fmt.Errorf("通知扫描启动失败: %w", err) } }
 	if len(securities) == 0 {
 		run.Status = RunFailed
 		run.ErrorMessage = "当前活动普通 A 股股票池为空"
