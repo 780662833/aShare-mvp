@@ -500,6 +500,7 @@ func TestEvaluateDoesNotUseLatestM30BarAsRetest(t *testing.T) {
 	input := trendInput()
 	bars := input.Bars[marketdata.FrequencyM30]
 	// 仅最新一根 K 线的 Low 进入回踩区间；更早一根没有触及区间。
+	bars[0].Open = 114.1
 	bars[0].Low = 113.9
 	bars[1].Low = 113.4
 	input.Bars[marketdata.FrequencyM30] = bars
@@ -573,8 +574,15 @@ func TestEvaluateEnforcesM30RetestLookbackWindowBoundaries(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if decision.Status != contract.StatusBuyObservation || !hasReason(decision, "M30_BREAKOUT_RETEST_CONFIRMED") {
-			t.Fatalf("窗口内最早一根回踩应被接受: status=%s reasons=%v missing=%+v", decision.Status, decision.ReasonCodes, decision.MissingConditions)
+		hasRetestEvidence := false
+		for _, evidence := range decision.EntryConditions {
+			if evidence.Code == "M30_BREAKOUT_RETEST_CONFIRMED" {
+				hasRetestEvidence = true
+				break
+			}
+		}
+		if decision.Status != contract.StatusBuyObservation || !hasRetestEvidence {
+			t.Fatalf("窗口内最早一根回踩应被接受: status=%s reasons=%v entry=%+v missing=%+v", decision.Status, decision.ReasonCodes, decision.EntryConditions, decision.MissingConditions)
 		}
 	})
 }
