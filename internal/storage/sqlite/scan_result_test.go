@@ -114,7 +114,7 @@ func TestGetScanResultJoinsAndValidatesOriginalDecisions(t *testing.T) {
 				return
 			}
 			if err != nil { t.Fatal(err) }
-			if got.Run.ID != run.ID || len(got.Items) != 1 || len(got.Decisions) != 1 ||
+			if got.Run.ID != run.ID || len(got.Items) != 1 || len(got.Decisions) != len(tt.itemIDs) ||
 				got.Decisions[0].DecisionID != tt.decisionID || got.Decisions[0].TsCode != "600519.SH" {
 				t.Fatalf("扫描结果关联不完整: %+v", got)
 			}
