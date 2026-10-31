@@ -1,0 +1,35 @@
+{
+  "czsc_url": "http://127.0.0.1:8091",
+  "czsc_timeout_seconds": 20,
+  "strategy": {
+    "AdjustMode": "QFQ",
+    "HistoryBars": 250,
+    "Chan3Buy": {
+      "Version": "example-not-validated-v1",
+      "MaxEntryDistanceAboveDefensePct": 5,
+      "DefenseBreakConfirmBars": 2,
+      "MaxSignalAgeBars": 3,
+      "DailyFastMAPeriod": 20,
+      "DailySlowMAPeriod": 60,
+      "AllowNeutralMarket": false,
+      "AllowUnknownMarket": true
+    },
+    "TrendBreakout": {
+      "Version": "example-not-validated-v1",
+      "LookbackDays": 20,
+      "BreakoutBufferPct": 0.1,
+      "MinVolumeRatio": 1.2,
+      "MinAmount": 1000000,
+      "MinClosePosition": 0.7,
+      "MaxChaseAboveBreakoutPct": 5,
+      "M30RetestTolerancePct": 0.5,
+      "M30RetestLookbackBars": 6,
+      "M30MinRetestClosePosition": 0.6,
+      "MinM60ClosesAboveBreakout": 1,
+      "M60FailureConfirmBars": 1,
+      "MaxSignalAgeDays": 3,
+      "AllowNeutralMarket": false,
+      "AllowUnknownMarket": true
+    }
+  }
+}
