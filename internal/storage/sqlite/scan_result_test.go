@@ -165,8 +165,21 @@ func TestGetScanResultValidatesSummaryConsistency(t *testing.T) {
 			started := asOf.Add(time.Minute)
 			run := scanmodel.Run{ID: "summary-check", AsOf: asOf, StartedAt: started, Status: scanmodel.RunRunning, TotalCount: 2}
 			items := make([]scanmodel.Item, 0, 2)
-			for _, code := range []string{"600519.SH", "000001.SZ"} {
-				items = append(items, scanmodel.Item{ScanID: run.ID, TsCode: code, Status: scanmodel.ItemPending})
+			for _, stock := range []struct{ code, name, exchange string }{
+				{"600519.SH", "贵州茅台", "SSE"},
+				{"000001.SZ", "平安银行", "SZSE"},
+			} {
+				_, err := store.DB().ExecContext(ctx, `INSERT INTO stock_basic
+					(ts_code,symbol,name,exchange,list_status,updated_at)
+					VALUES (?,?,?,?,?,?)`,
+					stock.code, stock.code[:6], stock.name, stock.exchange, "L", asOf.Format(time.RFC3339Nano))
+				if err != nil { t.Fatal(err) }
+				exchange := universe.ExchangeSSE
+				if stock.exchange == "SZSE" { exchange = universe.ExchangeSZSE }
+				items = append(items, scanmodel.Item{
+					ScanID: run.ID, TsCode: stock.code, SecurityName: stock.name,
+					Exchange: exchange, Status: scanmodel.ItemPending,
+				})
 			}
 			if err := store.CreateScanRun(ctx, run, items); err != nil { t.Fatal(err) }
 			for i, status := range tt.itemStatuses {
