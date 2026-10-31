@@ -130,6 +130,20 @@ func TestEvaluateReturnsBuyObservationWhenAllConditionsPass(t *testing.T) {
 	}
 }
 
+func TestEvaluateFailsClosedOnIncompleteM30Bar(t *testing.T) {
+	strategy, err := New(trendConfig())
+	if err != nil { t.Fatal(err) }
+	input := trendInput()
+	bars := input.Bars[marketdata.FrequencyM30]
+	bars[len(bars)-1].IsComplete = false
+	input.Bars[marketdata.FrequencyM30] = bars
+	decision, err := strategy.Evaluate(context.Background(), input)
+	if err != nil { t.Fatal(err) }
+	if decision.Status != contract.StatusDataIncomplete || !hasReason(decision, "BARS_M30_FORMING_BAR") {
+		t.Fatalf("未完成 M30 K 线必须 fail-closed: %+v", decision)
+	}
+}
+
 func TestEvaluateWaitsWhenM30RetestIsMissing(t *testing.T) {
 	strategy, err := New(trendConfig())
 	if err != nil { t.Fatal(err) }
