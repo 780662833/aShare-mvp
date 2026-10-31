@@ -203,7 +203,7 @@ func (s *Store) ListScanRunItems(ctx context.Context, scanID string) ([]scanmode
 	items := make([]scanmodel.Item, 0)
 	for rows.Next() {
 		var item scanmodel.Item
-		var exchange, status, decisionIDs, reasonCodes, startedAt, completedAt string
+		var exchange, status, decisionIDs, strategyResults, reasonCodes, startedAt, completedAt string
 		if err := rows.Scan(&item.ScanID, &item.TsCode, &item.SecurityName, &exchange,
 			&item.ListDate, &item.DelistDate, &status, &item.DataVersion,
 			&decisionIDs, &strategyResults, &reasonCodes, &item.ErrorMessage, &startedAt, &completedAt); err != nil {

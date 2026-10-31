@@ -296,7 +296,7 @@ func classifyResult(result appstrategy.Result, tsCode string, asOf time.Time) (I
 		return ItemFailed, decisionIDs, uniqueStrings(reasons), "单股评估缺少缠论三买决策"
 	}
 	if _, ok := seenStrategies[trendbreakout.StrategyID]; !ok {
-		return ItemFailed, decisionIDs, uniqueStrings(reasons), "单股评估缺少趋势突破决策"
+		return ItemFailed, decisionIDs, strategyResults, uniqueStrings(reasons), "单股评估缺少趋势突破决策"
 	}
 	return status, decisionIDs, strategyResults, uniqueStrings(reasons), ""
 }
