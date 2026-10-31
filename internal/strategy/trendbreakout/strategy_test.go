@@ -491,3 +491,86 @@ func TestEvaluateUsesSelectedBreakoutSignalLifecycleStartTime(t *testing.T) {
 		t.Fatalf("ConfirmedAt 必须保留所选突破信号的首次连续出现时间: %+v", decision.ConfirmedAt)
 	}
 }
+
+func TestEvaluateDoesNotUseLatestM30BarAsRetest(t *testing.T) {
+	strategy, err := New(trendConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := trendInput()
+	bars := input.Bars[marketdata.FrequencyM30]
+	// 仅最新一根 K 线的 Low 进入回踩区间；更早一根没有触及区间。
+	bars[0].Low = 114.0
+	bars[1].Low = 113.4
+	input.Bars[marketdata.FrequencyM30] = bars
+
+	decision, err := strategy.Evaluate(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Status != contract.StatusWaitEntry || !hasReason(decision, "M30_BREAKOUT_RETEST_NOT_FOUND") {
+		t.Fatalf("最新 M30 K 线不能同时充当回踩和回踩后转强确认: status=%s reasons=%v", decision.Status, decision.ReasonCodes)
+	}
+}
+
+func TestEvaluateEnforcesM30RetestLookbackWindowBoundaries(t *testing.T) {
+	t.Run("retest outside configured window is rejected", func(t *testing.T) {
+		config := trendConfig()
+		config.M30RetestLookbackBars = 2
+		strategy, err := New(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		input := trendInput()
+		bars := input.Bars[marketdata.FrequencyM30]
+		// 三根 post-hold K 线中，只有窗口之外的第一根触及回踩区间。
+		outside := trendBar(marketdata.FrequencyM30,
+			marketdata.ShanghaiWallTime(2026, 11, 2, 12, 0), 114.0, 114.2, 113.4, 240)
+		insidePrior := trendBar(marketdata.FrequencyM30,
+			marketdata.ShanghaiWallTime(2026, 11, 2, 12, 30), 114.3, 114.4, 114.0, 260)
+		latest := bars[len(bars)-1]
+		input.Bars[marketdata.FrequencyM30] = []marketdata.Bar{outside, insidePrior, latest}
+		m30Tech := input.Technical[marketdata.FrequencyM30]
+		m30Tech.AsOf = latest.BarTime
+		m30Tech.InputBarCount = 3
+		input.Technical[marketdata.FrequencyM30] = m30Tech
+
+		decision, err := strategy.Evaluate(context.Background(), input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision.Status != contract.StatusWaitEntry || !hasReason(decision, "M30_BREAKOUT_RETEST_NOT_FOUND") {
+			t.Fatalf("窗口外回踩不得被接受: status=%s reasons=%v", decision.Status, decision.ReasonCodes)
+		}
+	})
+
+	t.Run("oldest bar inside configured window is accepted", func(t *testing.T) {
+		config := trendConfig()
+		config.M30RetestLookbackBars = 3
+		strategy, err := New(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		input := trendInput()
+		bars := input.Bars[marketdata.FrequencyM30]
+		// 回踩恰好发生在三根窗口内最早的一根，之后一根不回踩，最新一根转强。
+		oldest := trendBar(marketdata.FrequencyM30,
+			marketdata.ShanghaiWallTime(2026, 11, 2, 12, 0), 114.0, 114.2, 113.4, 240)
+		prior := trendBar(marketdata.FrequencyM30,
+			marketdata.ShanghaiWallTime(2026, 11, 2, 12, 30), 114.3, 114.4, 114.0, 260)
+		latest := bars[len(bars)-1]
+		input.Bars[marketdata.FrequencyM30] = []marketdata.Bar{oldest, prior, latest}
+		m30Tech := input.Technical[marketdata.FrequencyM30]
+		m30Tech.AsOf = latest.BarTime
+		m30Tech.InputBarCount = 3
+		input.Technical[marketdata.FrequencyM30] = m30Tech
+
+		decision, err := strategy.Evaluate(context.Background(), input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision.Status != contract.StatusBuyObservation || !hasReason(decision, "M30_BREAKOUT_RETEST_CONFIRMED") {
+			t.Fatalf("窗口内最早一根回踩应被接受: status=%s reasons=%v missing=%+v", decision.Status, decision.ReasonCodes, decision.MissingConditions)
+		}
+	})
+}
