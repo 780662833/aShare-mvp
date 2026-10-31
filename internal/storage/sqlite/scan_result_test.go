@@ -90,9 +90,15 @@ func TestGetScanResultJoinsAndValidatesOriginalDecisions(t *testing.T) {
 			item.StrategyResults = tt.strategyResults
 			if item.StrategyResults == nil {
 				item.StrategyResults = []scanmodel.StrategyResult{{
-					StrategyID: tt.strategyID, StrategyStatus: "SUCCEEDED", PersistenceStatus: "SAVED",
+					StrategyID: "chan3buy", StrategyStatus: "SUCCEEDED", PersistenceStatus: "SAVED",
 					DecisionID: tt.decisionID, AsOf: asOf, DataVersion: "data-v1",
 				}}
+				if tt.secondDecisionID != "" {
+					item.StrategyResults = append(item.StrategyResults, scanmodel.StrategyResult{
+						StrategyID: tt.secondStrategyID, StrategyStatus: "SUCCEEDED", PersistenceStatus: "SAVED",
+						DecisionID: tt.secondDecisionID, AsOf: asOf, DataVersion: "data-v1",
+					})
+				}
 			} else {
 				for i := range item.StrategyResults {
 					item.StrategyResults[i].AsOf = asOf
