@@ -575,7 +575,7 @@ func (s *Store) GetLatestStrategyDecisionBefore(ctx context.Context, tsCode, str
 	var payload string
 	err := s.db.QueryRowContext(ctx, `SELECT payload FROM strategy_decisions
 		WHERE ts_code = ? AND strategy_id = ? AND as_of < ?
-		ORDER BY as_of DESC LIMIT 1`,
+		ORDER BY as_of DESC, saved_at DESC, decision_id DESC LIMIT 1`,
 		tsCode, strategyID, asOf.Format(time.RFC3339Nano),
 	).Scan(&payload)
 	if err != nil {
