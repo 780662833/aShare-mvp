@@ -243,9 +243,12 @@ func TestAnalyzePreservesAndValidatesPerSignalLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	at := marketdata.ShanghaiWallTime(2026, 10, 30, 11, 0)
-	bar := completeBar(at)
-	request, err := BuildRequestWithProfile([]marketdata.Bar{bar}, SignalProfileChan3BuyM30)
+	bars := []marketdata.Bar{
+		completeBar(marketdata.ShanghaiWallTime(2026, 10, 30, 9, 0)),
+		completeBar(marketdata.ShanghaiWallTime(2026, 10, 30, 10, 0)),
+		completeBar(marketdata.ShanghaiWallTime(2026, 10, 30, 11, 0)),
+	}
+	request, err := BuildRequestWithProfile(bars, SignalProfileChan3BuyM30)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,6 +274,44 @@ func TestValidateAnalyzeResponseRejectsLifecycleForUnknownSignal(t *testing.T) {
 	}
 	if err := validateAnalyzeResponse(request, response); err == nil {
 		t.Fatal("不存在于 signals 的生命周期 key 必须被拒绝")
+	}
+}
+
+func TestValidateAnalyzeResponseRejectsLifecycleOutsideRequestBars(t *testing.T) {
+	at := marketdata.ShanghaiWallTime(2026, 10, 30, 11, 0)
+	request, err := BuildRequestWithProfile([]marketdata.Bar{completeBar(at)}, SignalProfileChan3BuyM30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := "30分钟_D1_表里关系V230102"
+	response := responseForRequest(request)
+	response.Signals[key] = "向上_底分_任意_0"
+	response.SignalLifecycles = map[string]SignalLifecycle{
+		key: {AgeBars: 1, StartedAt: "2026-10-30T10:00:00+08:00"},
+	}
+	if err := validateAnalyzeResponse(request, response); err == nil {
+		t.Fatal("生命周期起始时间必须属于本次请求 K 线序列")
+	}
+}
+
+func TestValidateAnalyzeResponseRejectsLifecycleAgeMismatch(t *testing.T) {
+	at := marketdata.ShanghaiWallTime(2026, 10, 30, 11, 0)
+	bars := []marketdata.Bar{
+		completeBar(marketdata.ShanghaiWallTime(2026, 10, 30, 10, 0)),
+		completeBar(at),
+	}
+	request, err := BuildRequestWithProfile(bars, SignalProfileChan3BuyM30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := "30分钟_D1_表里关系V230102"
+	response := responseForRequest(request)
+	response.Signals[key] = "向上_底分_任意_0"
+	response.SignalLifecycles = map[string]SignalLifecycle{
+		key: {AgeBars: 0, StartedAt: "2026-10-30T10:00:00+08:00"},
+	}
+	if err := validateAnalyzeResponse(request, response); err == nil {
+		t.Fatal("age_bars 必须与请求内起始 K 线和最新 K 线的位置一致")
 	}
 }
 
