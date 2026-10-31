@@ -78,6 +78,20 @@ class ValidatePayloadTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             _market_iso(wrong)
 
+    def test_market_iso_normalizes_naive_datetime_strings(self):
+        self.assertEqual(
+            _market_iso("2026-10-30 15:00:00"),
+            "2026-10-30T15:00:00+08:00",
+        )
+        self.assertEqual(
+            _market_iso("2026-10-30T15:00:00+08:00"),
+            "2026-10-30T15:00:00+08:00",
+        )
+
+    def test_market_iso_rejects_utc_timestamp_strings(self):
+        with self.assertRaises(ValueError):
+            _market_iso("2026-10-30T07:00:00Z")
+
     def test_accepts_m30_timing_profile_and_uses_allowlisted_config(self):
         payload = sample_payload()
         payload["signal_profile"] = "chan3buy_m30_timing_v1"
