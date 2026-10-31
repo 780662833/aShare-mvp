@@ -2,7 +2,6 @@ package scanner
 
 import (
 	"testing"
-	"time"
 
 	appstrategy "github.com/780662833/aShare-mvp/internal/app/strategy"
 	"github.com/780662833/aShare-mvp/internal/marketdata"
