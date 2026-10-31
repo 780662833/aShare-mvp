@@ -99,8 +99,6 @@ func (s *Store) ListStrategyDecisions(ctx context.Context, query StrategyDecisio
 	if err != nil {
 		return StrategyDecisionPage{}, fmt.Errorf("查询历史策略决策失败: %w", err)
 	}
-	defer rows.Close()
-
 	page := StrategyDecisionPage{
 		Items: make([]contract.StrategyDecision, 0, query.Limit),
 		Total: total, Limit: query.Limit, Offset: query.Offset,
@@ -118,6 +116,9 @@ func (s *Store) ListStrategyDecisions(ctx context.Context, query StrategyDecisio
 	}
 	if err := rows.Err(); err != nil {
 		return StrategyDecisionPage{}, fmt.Errorf("遍历历史策略决策失败: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return StrategyDecisionPage{}, fmt.Errorf("关闭历史策略决策结果集失败: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return StrategyDecisionPage{}, fmt.Errorf("完成历史决策只读事务失败: %w", err)
