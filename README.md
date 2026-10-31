@@ -2,7 +2,7 @@
 
 个人 A 股研究与交易辅助平台 V1。
 
-**当前状态：S1–S5 阶段性交付完成，进入实际使用反馈期。** 当前不预设 S6，不因阶段结束而自动增加新功能。
+**当前状态：S1–S5 基础能力已完成；feature/full-scan-product-api 正在交付完整扫描 CLI 与本机 HTTP API。** 当前交付分支尚未合入 main，不预设后续阶段，不因阶段结束而自动增加新功能。
 
 ## 产品范围
 
@@ -10,7 +10,7 @@
 - 首发策略：缠论三买、趋势突破；两套策略独立运行、独立保存决策。
 - 策略输出是研究观察，不是交易指令；交易决定由用户作出。
 - 不做回测、不接券商、不自动下单、不做订单执行。
-- Go 模块化单体承载业务规则与编排；CZSC 通过独立 HTTP/JSON 服务复用。
+- Go 模块化单体承载业务规则与编排；CZSC 通过独立 HTTP/JSON 服务复用；产品 API 复用 Go 应用服务。
 - SQLite 优先；Parquet / DuckDB 延后。
 - 行情优先复用 gotdx 公开 API；保留 Provider 边界。
 
@@ -34,34 +34,36 @@ S5 通过 PR [#6](https://github.com/780662833/aShare-mvp/pull/6) 合并到 `mai
 
 ## 当前不包含
 
-- Hertz HTTP API 产品入口和完整研究工作台/UI。
+- 完整研究工作台/UI。
 - 自动行情同步、完整 ST/停牌历史、交易所公告日历自动更新。
 - 回测、Walk-forward、参数优化和收益验证。
 - 组合管理、资金分配和持仓风险预算。
 - 券商 API、订单执行和自动交易。
 - AI 自主决策或自动交易代理。
 
-以上项目不构成当前阶段的待办。是否规划下一阶段，等待实际使用反馈后再决定。
+以上项目不在本次交付范围内。完成当前 V1 产品交付后停止扩展，是否规划下一阶段等待实际使用反馈。
 
 ## 本地运行
 
-需要 Go 1.27.2 或更高版本。当前提供 CLI 串联已有行情适配、单股评估、扫描、扫描结果读取和历史决策查询。完整步骤与参考数据格式见 [CLI 实际运行说明](docs/implementation/08-runtime-cli.md)。
+需要 Go 1.27.2 或更高版本。当前交付分支提供完整 CLI（含全 ACTIVE 普通 A 股批量行情同步）和版本化本机 HTTP/JSON API。完整步骤与参考数据格式见 [CLI 实际运行说明](docs/implementation/08-runtime-cli.md)。
 
 ```powershell
 go test ./... -count=1
 go run ./cmd/ashare-mvp init
 go run ./cmd/ashare-mvp help
+# 本机 API：go run ./cmd/ashare-mvp serve --config configs/runtime.json
 ```
 
 策略配置模板：复制 `configs/runtime.example.json` 为本地配置文件。模板阈值只是配置格式演示，不是经过回测/实盘验证的推荐参数，运行前必须由使用者确认并修改配置版本。gotdx 不提供本项目所需的交易日历和逐日 ST/停牌状态，这些参考数据必须从可信来源导入；证券状态为 UNKNOWN 的记录不会进入扫描池。
 
-**运行链路仍有三项待开发事项（尚未实现）：**
+**扫描与 API 交付边界：**
 
-1. **证券状态数据与扫描资格过滤**：补齐可信交易日历、逐日 ST/停牌状态 Provider，并在扫描前自动排除 ST/*ST、停牌及状态缺失/过期证券。
-2. **Context 取消/超时传播**：确保取消和 deadline 超时沿 CLI、扫描、评估及 Provider 调用链正确传播和留痕。
-3. **决策持久化错误分类**：策略计算成功但决策写库失败时，准确归类为存储失败，不误报为策略分析失败。
+- 扫描资格门已按 as_of 对应交易日校验交易日历和逐日状态；ST/*ST、停牌、状态未知/缺失/过期及非上市时点证券会被排除，并在扫描记录中留存原因。
+- 可信证券状态和交易日历仍通过 import-reference 导入；gotdx 不提供这些事实数据，本版本不伪造自动 Provider。参考数据不完整时扫描 fail closed。
+- Context 取消/超时在 CLI、扫描、评估和 CZSC Provider 调用链传播；策略成功但决策持久化失败会独立分类。
+- API 仅监听 localhost/loopback，支持单股评估、后台扫描、扫描进度/逐股结果/排除项分页和历史决策查询；不提供远程开放访问、前端 UI 或自动交易。
 
-以上事项的详细现状、开发范围和验收要求见 [CLI 实际运行说明 §7](docs/implementation/08-runtime-cli.md)。三项完成并验收前，不应将当前 CLI 视为具备完整风险过滤的生产级全市场扫描入口。
+使用和验收细节见 [CLI 实际运行说明](docs/implementation/08-runtime-cli.md) 与 [产品 API 说明](docs/implementation/09-product-api.md)。CI 通过不等于用户 Windows 本机端到端验收，首次实际运行仍需按手册验证。
 
 CZSC 服务：
 

@@ -8,12 +8,13 @@
 |---|---|
 | `init` | 初始化 SQLite 和 migrations |
 | `sync-universe` | 从 gotdx 获取证券名单；证券上市状态保持 UNKNOWN |
-| `sync-bars` | 获取指定证券 D1/M60/M30 前复权 K 线并入库 |
+| `sync-bars` | 获取指定证券或 --all 当前 ACTIVE 普通 A 股的 D1/M60/M30 前复权 K 线并入库 |
 | `import-reference` | 导入经核验的证券主数据、每日状态和交易日历 |
 | `evaluate` | 调用现有单股双策略服务并分别保存决策 |
 | `scan` | 调用现有扫描器，扫描明确标记为 ACTIVE 的普通 A 股 |
 | `scan-result` | 根据原始 DecisionID 读取完整扫描结果 |
 | `history` | 调用 S5 历史决策分页查询 |
+| `serve` | 启动仅监听 localhost/loopback 的版本化 HTTP API |
 
 ## 2. 环境
 
@@ -28,6 +29,8 @@
 go run ./cmd/ashare-mvp init
 go run ./cmd/ashare-mvp sync-universe
 go run ./cmd/ashare-mvp sync-bars --ts-code 600519.SH --count 250 --freq all
+# 同步当前明确标记为 ACTIVE 的全部普通 A 股（串行执行，可 Ctrl+C 中断）
+go run ./cmd/ashare-mvp sync-bars --all --count 250 --freq all
 ```
 
 `sync-universe` 不会把 gotdx 返回的证券名单擅自标记为 ACTIVE，因为该名单不提供本项目要求的完整上市状态、ST 和停牌事实。它只写入 `ListingStatus=UNKNOWN` 的资料；未知状态不会进入扫描股票池。
@@ -105,15 +108,15 @@ go run ./cmd/ashare-mvp scan-result --scan-id scan-<实际返回的ID>
 go run ./cmd/ashare-mvp history --ts-code 600519.SH --limit 50 --offset 0
 ```
 
-扫描仅读取 SQLite 中明确标记为 ACTIVE 的普通 A 股股票池，并按代码排序；每只证券复用单股评估服务，扫描运行/逐股状态/DecisionID 由现有 scanner 和 SQLite 仓储留痕。扫描结果读取不会重新计算策略。历史查询支持 `--strategy-id`、`--status`、`--from`、`--to`、`--limit`、`--offset`。
+扫描读取 SQLite 中明确标记为 ACTIVE 的普通 A 股当前股票池，并按代码排序。启动策略计算前，扫描资格门按 as_of 对应交易日检查交易日历和逐日证券状态；ST、*ST、停牌、状态未知/缺失/过期以及上市日期不满足目标日期的证券会被排除。排除证券单独写入 scan_run_exclusions，保留交易日和原因码，不计入策略失败数。其余证券复用单股评估服务，两套策略独立执行。scan-result 返回逐股结果、策略决策和排除记录。该扫描使用当前 ACTIVE 股票池快照，不重建历史日期完整上市证券池。历史查询支持 `--strategy-id`、`--status`、`--from`、`--to`、`--limit`、`--offset`。
 
-## 7. 待开发事项（当前未实现）
+## 7. 运行边界与已完成的风险控制
 
-以下三项是现有运行链路的明确缺口，**状态均为待开发**。本次 CLI 接入没有修改这些业务逻辑，也不能将其视为已通过验收。
+以下说明当前已实现的控制和仍保留的数据来源限制。
 
-### 7.1 证券状态数据接入与扫描前 ST/停牌排除
+### 7.1 证券状态与扫描资格门
 
-<badge>待开发</badge>
+<badge color="success">代码与测试已完成</badge>
 
 - **现状**：gotdx adapter 当前没有本项目需要的交易日历、逐日 ST/停牌状态 Provider；参考数据只能通过可信来源导入。扫描器当前尚未证明会在扫描前按目标交易日的逐日状态自动排除 ST/*ST 和停牌证券。
 - **待开发内容**：
@@ -125,7 +128,7 @@ go run ./cmd/ashare-mvp history --ts-code 600519.SH --limit 50 --offset 0
 
 ### 7.2 Context 取消与超时传播
 
-<badge>待开发</badge>
+<badge color="success">代码与测试已完成</badge>
 
 - **现状**：自动审查指出，调用链对 `context.Canceled` 和 `context.DeadlineExceeded` 的传播行为仍需核对；当前不能宣称取消/超时语义已完整贯通。
 - **待开发内容**：核对 CLI、扫描编排、单股评估、行情/CZSC Provider 和仓储调用之间的 Context 传递；取消或超时时保留原始错误语义，不将其误报为普通策略失败或继续执行后续工作。
@@ -133,12 +136,15 @@ go run ./cmd/ashare-mvp history --ts-code 600519.SH --limit 50 --offset 0
 
 ### 7.3 策略成功但决策持久化失败的错误分类
 
-<badge>待开发</badge>
+<badge color="success">代码与测试已完成</badge>
 
-- **现状**：自动审查指出，策略分析成功但决策保存失败时，错误分类可能被归为分析失败；该分类尚未完成核实和修正。
-- **待开发内容**：明确区分行情/策略分析错误与决策持久化错误；当策略计算已成功而保存失败时，向上层返回可识别的存储错误，不得把它记录成策略分析失败或伪装为成功。
-- **验收要求**：模拟决策仓储写入失败，验证策略计算结果与持久化结果分别表达、错误类型准确、扫描运行/逐股状态可审计，且不会生成误导性的成功记录。
+- **已实现**：每个策略分别记录 StrategyStatus 和 PersistenceStatus；任一决策持久化失败时，扫描项标记 FAILED 并写入 DECISION_PERSISTENCE_FAILED，不会将该股票误报为成功或策略分析失败。
+- **验收**：包含策略成功但保存失败的测试，验证已保存的另一套策略 DecisionID 仍被保留。
 
-## 8. 运行验证边界
+## 8. HTTP API 启动
 
-运行命令不等于实盘验证。应先用少量明确证券和可信历史快照验证数据质量，再扩大扫描范围。上述三项待开发事项完成并通过对应验收前，不应将 CLI 当作具备完整全市场风险过滤和稳定取消/错误分类能力的生产扫描系统。
+```powershell
+go run ./cmd/ashare-mvp serve --config .\\configs\\runtime.json --addr 127.0.0.1:8080 --scan-timeout 30m
+```
+
+API 仅允许监听 localhost/loopback。接口、请求体、分页、错误码和后台扫描生命周期见 [产品 API 说明](09-product-api.md)。
