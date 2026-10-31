@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"errors"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -248,6 +249,7 @@ func (s *Service) EvaluateSymbol(ctx context.Context, tsCode string, asOf time.T
 	result.MarketStatus = input.MarketContext.Status
 
 	// 两套策略分别读取自身历史、独立评估和保存；任何单套失败都不阻断另一套。
+	var propagatedContextErr error
 	evaluateAndSave := func(strategyID string, evaluate func(context.Context, contract.StrategyInput) (contract.StrategyDecision, error)) {
 		sr := StrategyResult{StrategyID: strategyID, StrategyStatus: "NOT_EVALUATED",
 			PersistenceStatus: "NOT_ATTEMPTED", AsOf: asOf, DataVersion: input.DataVersion}
@@ -257,6 +259,7 @@ func (s *Service) EvaluateSymbol(ctx context.Context, tsCode string, asOf time.T
 		if previousErr == nil {
 			strategyInput.PreviousDecision = &previous
 		} else if previousErr != sql.ErrNoRows {
+			if errors.Is(previousErr, context.Canceled) || errors.Is(previousErr, context.DeadlineExceeded) { propagatedContextErr = previousErr; sr.ErrorMessage = previousErr.Error(); result.StrategyResults = append(result.StrategyResults, sr); return }
 			sr.StrategyStatus = "FAILED"
 			sr.ErrorMessage = fmt.Sprintf("读取上一条决策失败: %v", previousErr)
 			result.StrategyResults = append(result.StrategyResults, sr)
@@ -273,6 +276,7 @@ func (s *Service) EvaluateSymbol(ctx context.Context, tsCode string, asOf time.T
 		sr.DecisionID = decision.DecisionID
 		if saveErr := s.repo.SaveStrategyDecision(ctx, decision); saveErr != nil {
 			sr.PersistenceStatus = "FAILED"
+			if errors.Is(saveErr, context.Canceled) || errors.Is(saveErr, context.DeadlineExceeded) { propagatedContextErr = saveErr }
 			sr.ErrorMessage = fmt.Sprintf("保存策略决策失败: %v", saveErr)
 			result.StrategyResults = append(result.StrategyResults, sr)
 			return

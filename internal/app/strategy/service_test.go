@@ -170,6 +170,25 @@ func TestExpectedBarTimesPreserveM30AfterM60OrderingIntraday(t *testing.T) {
 	}
 }
 
+
+type deadlineAnalyzer struct{}
+func (deadlineAnalyzer) Analyze(context.Context, czscclient.AnalyzeRequest) (czscclient.AnalyzeResponse, error) { return czscclient.AnalyzeResponse{}, context.DeadlineExceeded }
+
+func TestEvaluateSymbolPropagatesProviderDeadline(t *testing.T) {
+	repo := validRepository()
+	asOf := marketdata.ShanghaiWallTime(2026, 10, 30, 11, 1)
+	fetchedAt := marketdata.ShanghaiWallTime(2026, 10, 30, 10, 59)
+	daily := make([]marketdata.Bar, 0, 64)
+	start := marketdata.ShanghaiWallTime(2026, 8, 27, 15, 0)
+	for i := 0; i < 64; i++ { daily = append(daily, completeFixtureBar(marketdata.FrequencyD1, start.AddDate(0, 0, i), fetchedAt, 100+float64(i)*0.15)) }
+	repo.bars[marketdata.FrequencyD1] = daily
+	repo.bars[marketdata.FrequencyM60] = []marketdata.Bar{completeFixtureBar(marketdata.FrequencyM60, marketdata.ShanghaiWallTime(2026,10,30,10,30), fetchedAt, 110)}
+	repo.bars[marketdata.FrequencyM30] = []marketdata.Bar{completeFixtureBar(marketdata.FrequencyM30, marketdata.ShanghaiWallTime(2026,10,30,11,0), fetchedAt, 110.2)}
+	service, err := New(repo, deadlineAnalyzer{}, validConfig()); if err != nil { t.Fatal(err) }
+	if _, err := service.EvaluateSymbol(context.Background(), "600519.SH", asOf); !errors.Is(err, context.DeadlineExceeded) { t.Fatalf("Provider deadline 必须向上传播，得到 %v", err) }
+	if len(repo.saved) != 0 { t.Fatalf("Provider deadline 不得伪装成分析决策并保存: %+v", repo.saved) }
+}
+
 func TestEvaluateSymbolRejectsCrossFrequencyMismatchBeforeCZSC(t *testing.T) {
 	repo := validRepository()
 	asOf := marketdata.ShanghaiWallTime(2026, 10, 30, 11, 1)
