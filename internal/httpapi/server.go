@@ -45,6 +45,7 @@ func New(store *sqlitestore.Store, evaluator Evaluator, scanTimeout time.Duratio
 	if scanTimeout <= 0 {
 		scanTimeout = 30 * time.Minute
 	}
+	if _, err := store.RecoverInterruptedScanRuns(context.Background(), time.Now()); err != nil { return nil, fmt.Errorf("恢复上次进程遗留扫描任务失败: %w", err) }
 	scan, err := scanner.New(store, evaluator)
 	if err != nil {
 		return nil, err

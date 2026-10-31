@@ -144,3 +144,35 @@ func TestScanRunPersistsAndReadsEligibilityExclusions(t *testing.T) {
 	if result.Run.TotalCount != 2 || result.Run.ExcludedCount != 1 || len(result.Items) != 1 || len(result.Exclusions) != 1 { t.Fatalf("扫描排除快照读取不完整: %+v", result) }
 	if result.Exclusions[0].TsCode != "600519.SH" || result.Exclusions[0].TradeDate != "2026-10-30" || len(result.Exclusions[0].ReasonCodes) != 1 || result.Exclusions[0].ReasonCodes[0] != "ST_STAR_SECURITY" { t.Fatalf("排除原因往返不一致: %+v", result.Exclusions[0]) }
 }
+
+func TestRecoverInterruptedScanRunsPreservesProgress(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "scan-recovery.db"))
+	if err != nil { t.Fatal(err) }
+	defer store.Close()
+	asOf := marketdata.ShanghaiWallTime(2026, 10, 30, 15, 1)
+	started := asOf.Add(time.Minute)
+	run := scanner.Run{ID:"scan-interrupted-001", AsOf:asOf, StartedAt:started, Status:scanner.RunRunning, TotalCount:3}
+	items := []scanner.Item{
+		{ScanID:run.ID, TsCode:"000001.SZ", Exchange:universe.ExchangeSZSE, Status:scanner.ItemPending},
+		{ScanID:run.ID, TsCode:"600000.SH", Exchange:universe.ExchangeSSE, Status:scanner.ItemPending},
+		{ScanID:run.ID, TsCode:"600519.SH", Exchange:universe.ExchangeSSE, Status:scanner.ItemPending},
+	}
+	if err := store.CreateScanRun(ctx, run, items); err != nil { t.Fatal(err) }
+	finished := started.Add(time.Second)
+	completed := items[0]; completed.Status = scanner.ItemSuccess; completed.StartedAt = started; completed.CompletedAt = finished
+	if err := store.UpdateScanRunItem(ctx, completed); err != nil { t.Fatal(err) }
+	recoveredAt := finished.Add(time.Minute)
+	count, err := store.RecoverInterruptedScanRuns(ctx, recoveredAt)
+	if err != nil { t.Fatal(err) }
+	if count != 1 { t.Fatalf("recovered count=%d, want 1", count) }
+	got, pending, err := store.GetScanRunProgress(ctx, run.ID)
+	if err != nil { t.Fatal(err) }
+	if got.Status != scanner.RunCancelled || got.SuccessCount != 1 || got.FailedCount != 0 || pending != 2 || !got.CompletedAt.Equal(recoveredAt) {
+		t.Fatalf("recovered run lost progress or misclassified pending items: run=%+v pending=%d", got, pending)
+	}
+	if count, err := store.RecoverInterruptedScanRuns(ctx, recoveredAt.Add(time.Minute)); err != nil || count != 0 {
+		t.Fatalf("recovery must be idempotent: count=%d err=%v", count, err)
+	}
+}
+

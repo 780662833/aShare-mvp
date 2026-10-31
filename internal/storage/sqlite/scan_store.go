@@ -180,6 +180,30 @@ func (s *Store) GetScanRun(ctx context.Context, scanID string) (scanmodel.Run, e
 }
 
 
+
+ // RecoverInterruptedScanRuns 在 API 启动时将上次进程遗留的 RUNNING 任务标记为 CANCELLED。
+ // 已完成逐股结果保留，未处理项继续保留 PENDING，不伪造为失败或成功。
+ func (s *Store) RecoverInterruptedScanRuns(ctx context.Context, completedAt time.Time) (int64, error) {
+ 	if completedAt.IsZero() { return 0, fmt.Errorf("恢复扫描任务的完成时间不能为空") }
+ 	tx, err := s.db.BeginTx(ctx, nil)
+ 	if err != nil { return 0, err }
+ 	defer tx.Rollback()
+ 	stamp := completedAt.Format(time.RFC3339Nano)
+ 	result, err := tx.ExecContext(ctx, `UPDATE scan_runs SET
+ 		completed_at = ?, status = 'CANCELLED',
+ 		success_count = (SELECT COUNT(*) FROM scan_run_items i WHERE i.scan_id = scan_runs.scan_id AND i.status = 'SUCCESS'),
+ 		data_incomplete_count = (SELECT COUNT(*) FROM scan_run_items i WHERE i.scan_id = scan_runs.scan_id AND i.status = 'DATA_INCOMPLETE'),
+ 		analysis_error_count = (SELECT COUNT(*) FROM scan_run_items i WHERE i.scan_id = scan_runs.scan_id AND i.status = 'ANALYSIS_ERROR'),
+ 		failed_count = (SELECT COUNT(*) FROM scan_run_items i WHERE i.scan_id = scan_runs.scan_id AND i.status = 'FAILED'),
+ 		error_message = '服务进程在扫描完成前退出；任务已恢复标记为 CANCELLED'
+ 		WHERE status = 'RUNNING'`)
+ 	if err != nil { return 0, fmt.Errorf("恢复中断扫描任务失败: %w", err) }
+ 	count, err := result.RowsAffected()
+ 	if err != nil { return 0, err }
+ 	if err := tx.Commit(); err != nil { return 0, err }
+ 	return count, nil
+ }
+
 // ListScanRunItemsPage 按证券代码稳定排序分页读取扫描项。
 func (s *Store) ListScanRunItemsPage(ctx context.Context, scanID string, limit, offset int) ([]scanmodel.Item, int64, error) {
 	if scanID == "" || limit < 1 || limit > 200 || offset < 0 { return nil, 0, fmt.Errorf("扫描项分页参数无效") }
