@@ -184,3 +184,57 @@ func TestStrategyInputRepositoriesReadTypedSnapshots(t *testing.T) {
 		t.Fatalf("最近开市日读取错误: %+v", latestOpen)
 	}
 }
+
+func TestGetLatestStrategyDecisionBeforeOrdersSameAsOfBySavedAt(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "decision-order.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.UpsertStockBasics(ctx, []universe.StockBasic{{
+		TsCode: "600519.SH", Symbol: "600519", Name: "贵州茅台",
+		Exchange: universe.ExchangeSSE, ListStatus: universe.ListingActive,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	asOf := marketdata.ShanghaiWallTime(2026, 10, 30, 10, 0)
+	base := contract.StrategyDecision{
+		TsCode: "600519.SH", SecurityName: "贵州茅台",
+		StrategyID: "chan3buy", StrategyVersion: "1.0.0", ConfigVersion: "chan-v1",
+		AsOf: asOf, Status: contract.StatusWatching,
+		InternalGrade: contract.GradeUnknown, MarketStatus: contract.MarketUnknown,
+		DataVersion: "data-test",
+	}
+	first := base
+	first.DecisionID = "decision-a"
+	if err := store.SaveStrategyDecision(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	second := base
+	second.DecisionID = "decision-b"
+	second.Status = contract.StatusWaitEntry
+	if err := store.SaveStrategyDecision(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().ExecContext(ctx,
+		"UPDATE strategy_decisions SET saved_at = ? WHERE decision_id = ?",
+		"2026-10-30T10:01:00+08:00", "decision-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().ExecContext(ctx,
+		"UPDATE strategy_decisions SET saved_at = ? WHERE decision_id = ?",
+		"2026-10-30T10:02:00+08:00", "decision-b"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.GetLatestStrategyDecisionBefore(ctx, base.TsCode, base.StrategyID, asOf.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DecisionID != "decision-b" || got.Status != contract.StatusWaitEntry {
+		t.Fatalf("同一 as_of 的历史快照应按 saved_at 选取最新记录: %+v", got)
+	}
+}
+
