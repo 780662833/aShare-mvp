@@ -1,0 +1,73 @@
+name: CZSC contract tests
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  czsc-contract:
+    name: CZSC contract and native signal tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect CZSC-related changes
+        id: changes
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          PUSH_HEAD_SHA: ${{ github.sha }}
+        run: |
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            BASE="$PR_BASE_SHA"
+            HEAD="$PR_HEAD_SHA"
+          else
+            BASE="$PUSH_BEFORE_SHA"
+            HEAD="$PUSH_HEAD_SHA"
+          fi
+
+          # On a first push there is no usable before-SHA; run CZSC tests
+          # conservatively rather than risk skipping a required validation.
+          if [[ -z "$BASE" || "$BASE" =~ ^0+$ ]]; then
+            echo "czsc=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          changed_files="$(git diff --name-only "$BASE" "$HEAD")"
+          if printf '%s\n' "$changed_files" | grep -Eq '^(czsc-service/|\.github/workflows/czsc-contract\.yml$)'; then
+            echo "czsc=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "czsc=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        if: steps.changes.outputs.czsc == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install stable Rust toolchain
+        if: steps.changes.outputs.czsc == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install pinned native CZSC
+        if: steps.changes.outputs.czsc == 'true'
+        working-directory: czsc-service
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run contract and native signal tests
+        if: steps.changes.outputs.czsc == 'true'
+        working-directory: czsc-service
+        run: python -m unittest discover -s czsc_service -p "test_*.py"

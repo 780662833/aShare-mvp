@@ -13,6 +13,7 @@
 
 5. [D1 证券主数据与交易日历](05-d1-security-master-and-calendar.md)：复用优先的证券资料、每日状态与交易日历最小模型。
 6. [D2 行情 K 线统一模型与时间语义](06-d2-kline-model-and-time-semantics.md)：D1/M30/M60、复权、来源、完成状态、Asia/Shanghai 时间和 CZSC 输入契约。
+7. [策略规则与决策契约](07-strategy-rules-and-decision-contract.md)：双策略隔离、PIT 数据约束、缠论三买与趋势突破规则、M30 回踩转强、扫描结果读取和版本治理。
 
 ## 文档治理
 

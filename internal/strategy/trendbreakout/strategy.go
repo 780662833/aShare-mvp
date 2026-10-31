@@ -17,7 +17,7 @@ import (
 
 const (
 	StrategyID      = "trend_breakout"
-	StrategyVersion = "1.1.0"
+	StrategyVersion = "1.2.0"
 
 	d1Profile        = czscclient.SignalProfileTrendD1
 	d1ProfileVersion = "trend-breakout-d1-v1"
@@ -43,6 +43,9 @@ type Config struct {
 	MinAmount                     float64
 	MinClosePosition              float64
 	MaxChaseAboveBreakoutPct      float64
+	M30RetestTolerancePct         float64
+	M30RetestLookbackBars         int
+	M30MinRetestClosePosition     float64
 	MinM60ClosesAboveBreakout     int
 	M60FailureConfirmBars         int
 	MaxSignalAgeDays              int
@@ -77,6 +80,16 @@ func New(config Config) (*Strategy, error) {
 	}
 	if !finitePositive(config.MaxChaseAboveBreakoutPct) {
 		return nil, fmt.Errorf("MaxChaseAboveBreakoutPct 必须是有限正数")
+	}
+	if !finitePositive(config.M30RetestTolerancePct) {
+		return nil, fmt.Errorf("M30RetestTolerancePct 必须是有限正数")
+	}
+	if config.M30RetestLookbackBars < 2 {
+		return nil, fmt.Errorf("M30RetestLookbackBars 必须至少为 2")
+	}
+	if math.IsNaN(config.M30MinRetestClosePosition) || math.IsInf(config.M30MinRetestClosePosition, 0) ||
+		config.M30MinRetestClosePosition < 0 || config.M30MinRetestClosePosition > 1 {
+		return nil, fmt.Errorf("M30MinRetestClosePosition 必须在 [0, 1] 范围内")
 	}
 	if config.MinM60ClosesAboveBreakout < 1 || config.M60FailureConfirmBars < 1 {
 		return nil, fmt.Errorf("M60 确认 K 线数量必须至少为 1")
@@ -349,7 +362,44 @@ func (s *Strategy) Evaluate(ctx context.Context, input contract.StrategyInput) (
 	if !isShortCycleTurnUp(m30Parts) {
 		return wait(decision, "M30_ENTRY_TIMING_NOT_CONFIRMED", "30 分钟尚未出现预定义的底分确认或向上笔延续证据"), nil
 	}
-	currentPrice := m30Bars[len(m30Bars)-1].Close
+
+	// M30 回踩只观察 M60 站稳之后的完整 K 线。
+	postHoldBars := barsAfter(m30Bars, m60Bars[len(m60Bars)-1].BarTime)
+	if len(postHoldBars) < 2 {
+		return wait(decision, "M30_RETEST_HISTORY_INSUFFICIENT", "M60 站稳后至少需要两根完整 M30 K 线，分别确认回踩和转强"), nil
+	}
+	if len(postHoldBars) > s.config.M30RetestLookbackBars {
+		postHoldBars = postHoldBars[len(postHoldBars)-s.config.M30RetestLookbackBars:]
+	}
+	currentM30 := postHoldBars[len(postHoldBars)-1]
+	retestLower := rangeHigh * (1 - s.config.M30RetestTolerancePct/100)
+	retestUpper := rangeHigh * (1 + s.config.M30RetestTolerancePct/100)
+	retestIndex := -1
+	for i := 0; i < len(postHoldBars)-1; i++ {
+		bar := postHoldBars[i]
+		if bar.Low >= retestLower && bar.Low <= retestUpper {
+			retestIndex = i
+		}
+	}
+	if retestIndex < 0 {
+		return wait(decision, "M30_BREAKOUT_RETEST_NOT_FOUND", "M60 站稳后规定窗口内，未观察到低点进入突破位回踩容忍区间"), nil
+	}
+	if currentM30.Close <= rangeHigh {
+		return wait(decision, "M30_RETEST_NOT_RECLAIMED", "回踩后最新完整 M30 收盘尚未重新站回突破位上方"), nil
+	}
+	previousM30 := postHoldBars[len(postHoldBars)-2]
+	if currentM30.Close <= previousM30.High {
+		return wait(decision, "M30_RETEST_STRENGTH_NOT_CONFIRMED", "最新完整 M30 收盘尚未有效突破前一根 M30 高点"), nil
+	}
+	retestClosePosition, err := feature.ClosePosition(currentM30)
+	if err != nil {
+		return dataIncomplete(decision, []string{"M30_RETEST_CLOSE_POSITION_INVALID"}), nil
+	}
+	if retestClosePosition < s.config.M30MinRetestClosePosition {
+		return wait(decision, "M30_RETEST_CLOSE_POSITION_INSUFFICIENT", "转强 K 线收盘位置未达到版本化配置门槛"), nil
+	}
+
+	currentPrice := currentM30.Close
 	distancePct, err := feature.PercentAbove(currentPrice, rangeHigh)
 	if err != nil {
 		return dataIncomplete(decision, []string{"BREAKOUT_ENTRY_PRICE_INVALID"}), nil
@@ -362,29 +412,41 @@ func (s *Strategy) Evaluate(ctx context.Context, input contract.StrategyInput) (
 			Description: "当前价相对突破位偏离超过配置上限，不追高",
 			Value: fmt.Sprintf("distance=%.4f%%; max=%.4f%%", distancePct, s.config.MaxChaseAboveBreakoutPct),
 			Frequency: string(marketdata.FrequencyM30),
-			ObservedAt: m30Bars[len(m30Bars)-1].BarTime,
+			ObservedAt: currentM30.BarTime,
 			Source: "Go feature.PercentAbove",
 			Confidence: contract.GradeHigh,
 		})
 		return decision, nil
 	}
-	decision.EntryConditions = append(decision.EntryConditions, contract.Evidence{
-		Code: "M30_ENTRY_TIMING_CONFIRMED",
-		Description: "30 分钟笔状态信号满足回踩底分确认或向上延续条件",
-		Value: strings.Join(m30Parts, "_"),
-		Frequency: string(marketdata.FrequencyM30),
-		ObservedAt: m30.AsOf,
-		Source: m30TimingKey,
-		Confidence: contract.GradeMedium,
-	}, contract.Evidence{
-		Code: "ENTRY_PRICE_WITHIN_CONFIGURED_ZONE",
-		Description: "当前 30 分钟收盘价位于突破位上方且未超过配置的追高距离",
-		Value: fmt.Sprintf("price=%.4f; breakout_level=%.4f; distance=%.4f%%", currentPrice, rangeHigh, distancePct),
-		Frequency: string(marketdata.FrequencyM30),
-		ObservedAt: m30Bars[len(m30Bars)-1].BarTime,
-		Source: "marketdata.Bar and Go feature.PercentAbove",
-		Confidence: contract.GradeHigh,
-	})
+	decision.EntryConditions = append(decision.EntryConditions,
+		contract.Evidence{
+			Code: "M30_ENTRY_TIMING_CONFIRMED",
+			Description: "CZSC 30 分钟短周期转强标签通过，同时完成突破位回踩、收复和转强确认",
+			Value: strings.Join(m30Parts, "_"),
+			Frequency: string(marketdata.FrequencyM30),
+			ObservedAt: currentM30.BarTime,
+			Source: m30TimingKey,
+			Confidence: contract.GradeMedium,
+		}, contract.Evidence{
+			Code: "M30_BREAKOUT_RETEST_CONFIRMED",
+			Description: "M60 站稳后，M30 低点进入突破位容忍区间，随后收盘收复突破位并高于前一根 M30 高点",
+			Value: fmt.Sprintf("retest_low=%.4f; zone=[%.4f,%.4f]; close=%.4f; previous_high=%.4f; close_position=%.4f/%.4f",
+				postHoldBars[retestIndex].Low, retestLower, retestUpper, currentM30.Close,
+				previousM30.High, retestClosePosition, s.config.M30MinRetestClosePosition),
+			Frequency: string(marketdata.FrequencyM30),
+			ObservedAt: currentM30.BarTime,
+			Source: "marketdata.Bar and versioned trendbreakout.Config",
+			Confidence: contract.GradeHigh,
+		}, contract.Evidence{
+			Code: "ENTRY_PRICE_WITHIN_CONFIGURED_ZONE",
+			Description: "当前 30 分钟收盘价位于突破位上方且未超过配置的追高距离",
+			Value: fmt.Sprintf("price=%.4f; breakout_level=%.4f; distance=%.4f%%", currentPrice, rangeHigh, distancePct),
+			Frequency: string(marketdata.FrequencyM30),
+			ObservedAt: currentM30.BarTime,
+			Source: "marketdata.Bar and Go feature.PercentAbove",
+			Confidence: contract.GradeHigh,
+		},
+	)
 
 	decision.Status = contract.StatusBuyObservation
 	decision.InternalGrade = contract.GradeHigh

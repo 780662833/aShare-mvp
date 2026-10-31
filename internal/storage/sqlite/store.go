@@ -370,6 +370,79 @@ func (s *Store) ListBars(ctx context.Context, tsCode string, freq marketdata.Fre
 }
 
 
+// ListActiveStockBasics 按 ts_code 稳定排序读取明确处于上市状态的证券基础资料。
+func (s *Store) ListActiveStockBasics(ctx context.Context) ([]universe.StockBasic, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT
+		ts_code, symbol, name, area, industry, fullname, enname, cnspell,
+		market, exchange, curr_type, list_status, list_date, delist_date, is_hs
+		FROM stock_basic
+		WHERE list_status = ?
+		ORDER BY ts_code ASC`, string(universe.ListingActive))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]universe.StockBasic, 0)
+	for rows.Next() {
+		var item universe.StockBasic
+		var exchange, status string
+		if err := rows.Scan(
+			&item.TsCode, &item.Symbol, &item.Name, &item.Area, &item.Industry,
+			&item.Fullname, &item.Ename, &item.Cnspell, &item.Market, &exchange,
+			&item.CurrType, &status, &item.ListDate, &item.DelistDate, &item.IsHS,
+		); err != nil {
+			return nil, err
+		}
+		item.Exchange = universe.Exchange(exchange)
+		item.ListStatus = universe.ListingStatus(status)
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// ListSecurityDailyStates 精确读取指定交易日的全部证券状态，按 ts_code 稳定排序。
+func (s *Store) ListSecurityDailyStates(ctx context.Context, tradeDate string) ([]universe.SecurityDailyState, error) {
+	if _, err := time.Parse("2006-01-02", tradeDate); err != nil {
+		return nil, fmt.Errorf("trade_date 必须为 YYYY-MM-DD: %w", err)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT
+		trade_date, ts_code, st_type, suspend_type, suspend_timing, source, fetched_at
+		FROM security_daily_state
+		WHERE trade_date = ?
+		ORDER BY ts_code ASC`, tradeDate)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]universe.SecurityDailyState, 0)
+	for rows.Next() {
+		var item universe.SecurityDailyState
+		var stType, suspendType, fetchedAt string
+		if err := rows.Scan(
+			&item.TradeDate, &item.TsCode, &stType, &suspendType,
+			&item.SuspendTiming, &item.Source, &fetchedAt,
+		); err != nil {
+			return nil, err
+		}
+		item.STType = universe.STType(stType)
+		item.SuspendType = universe.SuspendType(suspendType)
+		item.FetchedAt, err = time.Parse(time.RFC3339Nano, fetchedAt)
+		if err != nil {
+			return nil, fmt.Errorf("解析证券状态 fetched_at 失败: %w", err)
+		}
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 // GetStockBasic 按规范证券代码读取证券基础资料。
 func (s *Store) GetStockBasic(ctx context.Context, tsCode string) (universe.StockBasic, error) {
 	var item universe.StockBasic
