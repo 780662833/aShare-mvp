@@ -126,3 +126,21 @@ func TestCompleteCancelledScanAllowsPendingSnapshotItems(t *testing.T) {
 		t.Fatalf("取消扫描状态不正确: %+v", got)
 	}
 }
+
+func TestScanRunPersistsAndReadsEligibilityExclusions(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "scan-exclusions.db")); if err != nil { t.Fatal(err) }; defer store.Close()
+	asOf := marketdata.ShanghaiWallTime(2026, 10, 30, 15, 1)
+	started := asOf.Add(time.Minute); completed := started.Add(time.Minute)
+	run := scanner.Run{ID:"scan-exclusions-001", AsOf:asOf, StartedAt:started, Status:scanner.RunRunning, TotalCount:2, ExcludedCount:1}
+	items := []scanner.Item{{ScanID:run.ID, TsCode:"000001.SZ", SecurityName:"平安银行", Exchange:universe.ExchangeSZSE, Status:scanner.ItemPending}}
+	exclusions := []scanner.Exclusion{{ScanID:run.ID, TsCode:"600519.SH", SecurityName:"贵州茅台", Exchange:universe.ExchangeSSE, TradeDate:"2026-10-30", ReasonCodes:[]string{"ST_STAR_SECURITY"}}}
+	if err := store.CreateScanRunWithExclusions(ctx, run, items, exclusions); err != nil { t.Fatal(err) }
+	item := items[0]; item.Status = scanner.ItemSuccess; item.StartedAt = started; item.CompletedAt = completed
+	if err := store.UpdateScanRunItem(ctx, item); err != nil { t.Fatal(err) }
+	run.Status = scanner.RunCompleted; run.SuccessCount = 1; run.CompletedAt = completed
+	if err := store.CompleteScanRun(ctx, run); err != nil { t.Fatal(err) }
+	result, err := store.GetScanResult(ctx, run.ID); if err != nil { t.Fatal(err) }
+	if result.Run.TotalCount != 2 || result.Run.ExcludedCount != 1 || len(result.Items) != 1 || len(result.Exclusions) != 1 { t.Fatalf("扫描排除快照读取不完整: %+v", result) }
+	if result.Exclusions[0].TsCode != "600519.SH" || result.Exclusions[0].TradeDate != "2026-10-30" || len(result.Exclusions[0].ReasonCodes) != 1 || result.Exclusions[0].ReasonCodes[0] != "ST_STAR_SECURITY" { t.Fatalf("排除原因往返不一致: %+v", result.Exclusions[0]) }
+}
