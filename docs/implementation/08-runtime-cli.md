@@ -118,28 +118,30 @@ go run ./cmd/ashare-mvp history --ts-code 600519.SH --limit 50 --offset 0
 
 <badge color="success">代码与测试已完成</badge>
 
-- **现状**：gotdx adapter 当前没有本项目需要的交易日历、逐日 ST/停牌状态 Provider；参考数据只能通过可信来源导入。扫描器当前尚未证明会在扫描前按目标交易日的逐日状态自动排除 ST/*ST 和停牌证券。
-- **待开发内容**：
-  1. 接入或实现可信的交易日历、逐日 ST/停牌状态数据 Provider，并保留来源、采集时间和 PIT 可追溯信息。
-  2. 在扫描入口/股票池资格判断处，基于本次扫描的 `as_of` 对应交易日状态，明确排除 ST/*ST、停牌及状态缺失/过期的证券。
-  3. 保证单股评估与批量扫描采用一致的证券状态资格规则；未知状态不得默认视为正常。
-- **验收要求**：覆盖正常证券、ST、*ST、停牌、状态缺失、状态过期及历史 `as_of` 场景；证明不合格证券不会进入策略评估，并验证状态数据来源和时点可审计。
-- **运行限制**：在此项完成并验收前，不应将当前 CLI 扫描视为可直接用于全市场扫描；只能对已人工核验的少量 ACTIVE 股票池进行受控验证。
+- 扫描开始前冻结当前 ACTIVE 普通 A 股股票池，按证券代码稳定排序。
+- 按每个交易所的 as_of 日期读取交易日历；目标自然日休市时回退到不晚于目标日期的最近开市日。
+- 交易日历与证券每日状态必须满足数据模型校验，且 fetched_at 不晚于 as_of。
+- 仅允许目标交易日已上市、未退市、ST 状态明确为 NONE、停牌状态明确为 NONE 的证券进入策略评估。
+- ST、*ST、停牌、状态未知/缺失/过期和上市日期不满足的证券写入独立排除记录，保存 trade_date 与原因码，不计入策略失败数。
+- **数据来源限制**：gotdx 不提供交易日历和逐日 ST/停牌事实；参考数据仍需由可信来源通过 import-reference 导入。缺少交易日历时扫描 fail closed。
+- **股票池限制**：扫描使用当前 ACTIVE 股票池快照，不支持历史日期完整上市证券池重建。不要把该能力描述为可重建任意历史时点的完整市场成分。
 
 ### 7.2 Context 取消与超时传播
 
 <badge color="success">代码与测试已完成</badge>
 
-- **现状**：自动审查指出，调用链对 `context.Canceled` 和 `context.DeadlineExceeded` 的传播行为仍需核对；当前不能宣称取消/超时语义已完整贯通。
-- **待开发内容**：核对 CLI、扫描编排、单股评估、行情/CZSC Provider 和仓储调用之间的 Context 传递；取消或超时时保留原始错误语义，不将其误报为普通策略失败或继续执行后续工作。
-- **验收要求**：分别覆盖主动取消、deadline 超时、扫描中途取消及 Provider 超时；验证调用及时结束、错误可识别、扫描运行与逐股状态留痕一致。
+- 通用 CLI 命令支持 --timeout；API 后台扫描支持 --scan-timeout。
+- 主动取消和 deadline 沿 CLI、扫描、单股评估与 CZSC Provider 调用链传播；取消后扫描会尽力保存已完成逐股结果和 CANCELLED 终态。
+- API 正常关闭时取消后台扫描；异常退出后，下次 API 启动会将数据库中遗留 RUNNING 任务恢复标记为 CANCELLED，保留已完成记录和 PENDING 项，不自动续跑。
+- context.Canceled / context.DeadlineExceeded 不应被误报为普通策略结论。Windows 本机 Ctrl+C、实际 CZSC 网络中断仍需用户环境联调。
 
 ### 7.3 策略成功但决策持久化失败的错误分类
 
 <badge color="success">代码与测试已完成</badge>
 
-- **已实现**：每个策略分别记录 StrategyStatus 和 PersistenceStatus；任一决策持久化失败时，扫描项标记 FAILED 并写入 DECISION_PERSISTENCE_FAILED，不会将该股票误报为成功或策略分析失败。
-- **验收**：包含策略成功但保存失败的测试，验证已保存的另一套策略 DecisionID 仍被保留。
+- 每套策略分别记录 StrategyStatus 和 PersistenceStatus。
+- 策略计算成功但决策保存失败时，PersistenceStatus=FAILED；扫描项标记 FAILED 并记录 DECISION_PERSISTENCE_FAILED，不会误报为策略分析成功。
+- 一套策略已成功保存时，另一套策略的持久化失败不会抹掉已保存的 DecisionID。
 
 ## 8. HTTP API 启动
 
