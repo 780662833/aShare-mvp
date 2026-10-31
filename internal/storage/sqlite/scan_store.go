@@ -11,39 +11,24 @@ import (
 )
 
 func (s *Store) CreateScanRun(ctx context.Context, run scanmodel.Run, items []scanmodel.Item) error {
-	if run.ID == "" || run.AsOf.IsZero() || run.StartedAt.IsZero() ||
-		run.Status != scanmodel.RunRunning || run.TotalCount != len(items) {
-		return fmt.Errorf("扫描运行初始化参数无效")
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO scan_runs (
-		scan_id, as_of, started_at, status, total_count
-	) VALUES (?, ?, ?, ?, ?)`,
-		run.ID, run.AsOf.Format(time.RFC3339Nano),
-		run.StartedAt.Format(time.RFC3339Nano), string(run.Status), run.TotalCount)
-	if err != nil {
-		_ = tx.Rollback()
-		return fmt.Errorf("创建扫描运行记录失败: %w", err)
-	}
+	return s.CreateScanRunWithExclusions(ctx, run, items, nil)
+}
+
+func (s *Store) CreateScanRunWithExclusions(ctx context.Context, run scanmodel.Run, items []scanmodel.Item, exclusions []scanmodel.Exclusion) error {
+	if run.ID == "" || run.AsOf.IsZero() || run.StartedAt.IsZero() || run.Status != scanmodel.RunRunning || run.TotalCount != len(items)+len(exclusions) || run.ExcludedCount != len(exclusions) { return fmt.Errorf("扫描运行初始化参数无效") }
+	tx, err := s.db.BeginTx(ctx, nil); if err != nil { return err }
+	_, err = tx.ExecContext(ctx, "INSERT INTO scan_runs (scan_id, as_of, started_at, status, total_count, excluded_count) VALUES (?, ?, ?, ?, ?, ?)", run.ID, run.AsOf.Format(time.RFC3339Nano), run.StartedAt.Format(time.RFC3339Nano), string(run.Status), run.TotalCount, run.ExcludedCount)
+	if err != nil { _ = tx.Rollback(); return fmt.Errorf("创建扫描运行记录失败: %w", err) }
 	for _, item := range items {
-		if item.ScanID != run.ID || item.TsCode == "" ||
-			item.Status != scanmodel.ItemPending {
-			_ = tx.Rollback()
-			return fmt.Errorf("扫描证券初始化记录无效: %s", item.TsCode)
-		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO scan_run_items (
-			scan_id, ts_code, security_name, exchange, list_date, delist_date,
-			status, decision_ids, reason_codes
-		) VALUES (?, ?, ?, ?, ?, ?, ?, '[]', '[]')`,
-			item.ScanID, item.TsCode, item.SecurityName, string(item.Exchange),
-			item.ListDate, item.DelistDate, string(item.Status))
-		if err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("创建证券 %s 扫描记录失败: %w", item.TsCode, err)
-		}
+		if item.ScanID != run.ID || item.TsCode == "" || item.Status != scanmodel.ItemPending { _ = tx.Rollback(); return fmt.Errorf("扫描证券初始化记录无效: %s", item.TsCode) }
+		_, err = tx.ExecContext(ctx, "INSERT INTO scan_run_items (scan_id, ts_code, security_name, exchange, list_date, delist_date, status, decision_ids, reason_codes) VALUES (?, ?, ?, ?, ?, ?, ?, '[]', '[]')", item.ScanID, item.TsCode, item.SecurityName, string(item.Exchange), item.ListDate, item.DelistDate, string(item.Status))
+		if err != nil { _ = tx.Rollback(); return fmt.Errorf("创建证券 %s 扫描记录失败: %w", item.TsCode, err) }
+	}
+	for _, exclusion := range exclusions {
+		if exclusion.ScanID != run.ID || exclusion.TsCode == "" || exclusion.TradeDate == "" || len(exclusion.ReasonCodes) == 0 { _ = tx.Rollback(); return fmt.Errorf("扫描排除记录无效: %s", exclusion.TsCode) }
+		reasons, marshalErr := json.Marshal(exclusion.ReasonCodes); if marshalErr != nil { _ = tx.Rollback(); return fmt.Errorf("序列化扫描排除原因失败: %w", marshalErr) }
+		_, err = tx.ExecContext(ctx, "INSERT INTO scan_run_exclusions (scan_id, ts_code, security_name, exchange, trade_date, reason_codes) VALUES (?, ?, ?, ?, ?, ?)", exclusion.ScanID, exclusion.TsCode, exclusion.SecurityName, string(exclusion.Exchange), exclusion.TradeDate, string(reasons))
+		if err != nil { _ = tx.Rollback(); return fmt.Errorf("保存证券 %s 扫描排除记录失败: %w", exclusion.TsCode, err) }
 	}
 	return tx.Commit()
 }
@@ -86,6 +71,16 @@ func (s *Store) UpdateScanRunItem(ctx context.Context, item scanmodel.Item) erro
 	return nil
 }
 
+func (s *Store) ListScanRunExclusions(ctx context.Context, scanID string) ([]scanmodel.Exclusion, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT scan_id, ts_code, security_name, exchange, trade_date, reason_codes FROM scan_run_exclusions WHERE scan_id = ? ORDER BY ts_code ASC", scanID)
+	if err != nil { return nil, err }; defer rows.Close()
+	items := make([]scanmodel.Exclusion, 0)
+	for rows.Next() { var item scanmodel.Exclusion; var exchange, reasons string
+		if err := rows.Scan(&item.ScanID, &item.TsCode, &item.SecurityName, &exchange, &item.TradeDate, &reasons); err != nil { return nil, err }
+		item.Exchange = universe.Exchange(exchange); if err := json.Unmarshal([]byte(reasons), &item.ReasonCodes); err != nil { return nil, fmt.Errorf("解析扫描排除原因失败: %w", err) }; items = append(items, item)
+	}; if err := rows.Err(); err != nil { return nil, err }; return items, nil
+}
+
 func (s *Store) CompleteScanRun(ctx context.Context, run scanmodel.Run) error {
 	if run.ID == "" || run.CompletedAt.IsZero() ||
 		(run.Status != scanmodel.RunCompleted && run.Status != scanmodel.RunPartial &&
@@ -93,29 +88,21 @@ func (s *Store) CompleteScanRun(ctx context.Context, run scanmodel.Run) error {
 		return fmt.Errorf("扫描运行终态参数无效")
 	}
 	processed := run.SuccessCount + run.DataIncompleteCount + run.AnalysisErrorCount + run.FailedCount
-	if processed > run.TotalCount {
-		return fmt.Errorf("扫描运行汇总计数超过总数")
-	}
+	eligibleCount := run.TotalCount - run.ExcludedCount
+	if run.ExcludedCount < 0 || eligibleCount < 0 || processed > eligibleCount { return fmt.Errorf("扫描运行汇总计数超过有效证券范围") }
 	switch run.Status {
 	case scanmodel.RunCompleted:
-		if run.SuccessCount != run.TotalCount || run.DataIncompleteCount != 0 ||
-			run.AnalysisErrorCount != 0 || run.FailedCount != 0 {
-			return fmt.Errorf("COMPLETED 扫描必须全部成功")
-		}
+		if run.SuccessCount != eligibleCount || run.DataIncompleteCount != 0 || run.AnalysisErrorCount != 0 || run.FailedCount != 0 { return fmt.Errorf("COMPLETED 扫描必须所有合格证券成功，排除项单独计数") }
 	case scanmodel.RunPartial:
-		if run.SuccessCount == 0 || processed != run.TotalCount {
-			return fmt.Errorf("PARTIAL_SUCCESS 扫描必须有成功项且所有证券均已处理")
-		}
+		if run.SuccessCount == 0 || processed != eligibleCount { return fmt.Errorf("PARTIAL_SUCCESS 扫描必须有成功项且所有合格证券均已处理") }
 	case scanmodel.RunFailed:
-		if run.SuccessCount != 0 || processed != run.TotalCount {
-			return fmt.Errorf("FAILED 扫描必须无成功项且所有证券均已处理")
-		}
+		if run.SuccessCount != 0 || eligibleCount == 0 || processed != eligibleCount { return fmt.Errorf("FAILED 扫描必须存在合格证券、无成功项且所有合格证券均已处理") }
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	var total, success, incomplete, analysisError, failed, pending int
+	var total, success, incomplete, analysisError, failed, pending, excluded int
 	err = tx.QueryRowContext(ctx, `SELECT COUNT(*),
 		COALESCE(SUM(CASE WHEN status = 'SUCCESS' THEN 1 ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN status = 'DATA_INCOMPLETE' THEN 1 ELSE 0 END), 0),
@@ -128,7 +115,8 @@ func (s *Store) CompleteScanRun(ctx context.Context, run scanmodel.Run) error {
 		_ = tx.Rollback()
 		return fmt.Errorf("核对扫描证券明细失败: %w", err)
 	}
-	if total != run.TotalCount || success != run.SuccessCount ||
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM scan_run_exclusions WHERE scan_id = ?", run.ID).Scan(&excluded); err != nil { _ = tx.Rollback(); return fmt.Errorf("核对扫描排除明细失败: %w", err) }
+	if total+excluded != run.TotalCount || excluded != run.ExcludedCount || success != run.SuccessCount ||
 		incomplete != run.DataIncompleteCount || analysisError != run.AnalysisErrorCount ||
 		failed != run.FailedCount {
 		_ = tx.Rollback()
@@ -140,10 +128,10 @@ func (s *Store) CompleteScanRun(ctx context.Context, run scanmodel.Run) error {
 	}
 	result, err := tx.ExecContext(ctx, `UPDATE scan_runs SET
 		completed_at = ?, status = ?, success_count = ?, data_incomplete_count = ?,
-		analysis_error_count = ?, failed_count = ?, error_message = ?
+		analysis_error_count = ?, failed_count = ?, excluded_count = ?, error_message = ?
 		WHERE scan_id = ? AND status = ? AND total_count = ?`,
 		run.CompletedAt.Format(time.RFC3339Nano), string(run.Status), run.SuccessCount,
-		run.DataIncompleteCount, run.AnalysisErrorCount, run.FailedCount,
+		run.DataIncompleteCount, run.AnalysisErrorCount, run.FailedCount, run.ExcludedCount,
 		run.ErrorMessage, run.ID, string(scanmodel.RunRunning), run.TotalCount)
 	if err != nil {
 		_ = tx.Rollback()
