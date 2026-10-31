@@ -149,4 +149,4 @@ go run ./cmd/ashare-mvp history --ts-code 600519.SH --limit 50 --offset 0
 go run ./cmd/ashare-mvp serve --config .\\configs\\runtime.json --addr 127.0.0.1:8080 --scan-timeout 30m
 ```
 
-API 仅允许监听 localhost/loopback。接口、请求体、分页、错误码和后台扫描生命周期见 [产品 API 说明](09-product-api.md)。
+API 仅允许监听 localhost/loopback。接口、请求体、分页、错误码和后台扫描生命周期见 [产品 API 说明](09-product-api.md)，机器可读契约见 [OpenAPI 3.1](openapi-v1.yaml)。

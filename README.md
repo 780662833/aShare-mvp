@@ -2,7 +2,7 @@
 
 个人 A 股研究与交易辅助平台 V1。
 
-**当前状态：S1–S5 基础能力已完成；feature/full-scan-product-api 正在交付完整扫描 CLI 与本机 HTTP API。** 当前交付分支尚未合入 main，不预设后续阶段，不因阶段结束而自动增加新功能。
+**当前状态：S1–S5 基础能力已完成；完整扫描 CLI 与本机 HTTP API 的代码和 CI 自动化测试已完成，位于 `feature/full-scan-product-api` 分支。** 尚未合入 `main`，Windows 本机端到端验收待执行；本次范围完成后停止扩展。
 
 ## 产品范围
 
@@ -29,6 +29,7 @@
 | S4.3 | 扫描编排、扫描运行/逐股结果留痕、原始 DecisionID 关联读取 | 已完成 |
 | S4.4 | 趋势突破 M30 真实回踩与转强确认规则 | 已完成 |
 | S5 | 历史策略决策筛选、稳定排序、分页、总数与原始 payload 查询 | 已完成 |
+| Runtime V1 | 全 ACTIVE 普通 A 股批量行情同步、全市场扫描资格门、CLI 和本机 HTTP API | 代码与 CI 已完成；待 Windows 本机验收 |
 
 S5 通过 PR [#6](https://github.com/780662833/aShare-mvp/pull/6) 合并到 `main`，merge commit 为 `6847d9237ddb2e1b2ead8e0671ee18500dd8e59c`。合并后 Go tests 已通过；CZSC contract/native workflow 的最终状态请查看 [GitHub Actions](https://github.com/780662833/aShare-mvp/actions)。
 
@@ -45,7 +46,7 @@ S5 通过 PR [#6](https://github.com/780662833/aShare-mvp/pull/6) 合并到 `mai
 
 ## 本地运行
 
-需要 Go 1.27.2 或更高版本。当前交付分支提供完整 CLI（含全 ACTIVE 普通 A 股批量行情同步）和版本化本机 HTTP/JSON API。完整步骤与参考数据格式见 [CLI 实际运行说明](docs/implementation/08-runtime-cli.md)。
+需要 Go 1.27.2 或更高版本。当前交付分支提供完整 CLI（含全 ACTIVE 普通 A 股批量行情同步）和版本化本机 HTTP/JSON API；OpenAPI 3.1 契约见 `docs/implementation/openapi-v1.yaml`。完整步骤与参考数据格式见 [CLI 实际运行说明](docs/implementation/08-runtime-cli.md)。
 
 ```powershell
 go test ./... -count=1
