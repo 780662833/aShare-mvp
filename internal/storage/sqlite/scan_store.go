@@ -221,10 +221,12 @@ func (s *Store) ListScanRunExclusionsPage(ctx context.Context, scanID string, li
 // GetScanRunProgress 从逐股明细计算实时进度，适用于 RUNNING 扫描查询。
 func (s *Store) GetScanRunProgress(ctx context.Context, scanID string) (scanmodel.Run, int, error) {
 	run, err := s.GetScanRun(ctx, scanID); if err != nil { return scanmodel.Run{}, 0, err }
-	var total, pending int
-	err = s.db.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(CASE WHEN status='PENDING' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status='SUCCESS' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status='DATA_INCOMPLETE' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status='ANALYSIS_ERROR' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END),0) FROM scan_run_items WHERE scan_id = ?`, scanID).Scan(&total, &pending, &run.SuccessCount, &run.DataIncompleteCount, &run.AnalysisErrorCount, &run.FailedCount)
+	var total, pending, success, incomplete, analysisError, failed int
+	err = s.db.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(CASE WHEN status='PENDING' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status='SUCCESS' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status='DATA_INCOMPLETE' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status='ANALYSIS_ERROR' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END),0) FROM scan_run_items WHERE scan_id = ?`, scanID).Scan(&total, &pending, &success, &incomplete, &analysisError, &failed)
 	if err != nil { return scanmodel.Run{}, 0, err }
-	if total+run.ExcludedCount != run.TotalCount { return scanmodel.Run{}, 0, fmt.Errorf("扫描项与排除项数量不匹配") }
+	if run.Status == scanmodel.RunRunning {
+		run.SuccessCount, run.DataIncompleteCount, run.AnalysisErrorCount, run.FailedCount = success, incomplete, analysisError, failed
+	}
 	return run, pending, nil
 }
 
