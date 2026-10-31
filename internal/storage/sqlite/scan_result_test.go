@@ -9,7 +9,7 @@ import (
 
 	"github.com/780662833/aShare-mvp/internal/market/universe"
 	"github.com/780662833/aShare-mvp/internal/marketdata"
-	"github.com/780662833/aShare-mvp/internal/scanner"
+	scanmodel "github.com/780662833/aShare-mvp/internal/scanner/model"
 	"github.com/780662833/aShare-mvp/internal/strategy/contract"
 )
 
@@ -47,11 +47,11 @@ func TestGetScanResultJoinsAndValidatesOriginalDecisions(t *testing.T) {
 				if err != nil { t.Fatal(err) }
 			}
 
-			run := scanner.Run{ID: "scan-" + strings.ReplaceAll(tt.name, " ", "-"), AsOf: asOf,
-				StartedAt: asOf.Add(time.Minute), Status: scanner.RunRunning, TotalCount: 1}
-			item := scanner.Item{ScanID: run.ID, TsCode: "600519.SH", SecurityName: "贵州茅台",
-				Exchange: universe.ExchangeSSE, Status: scanner.ItemPending}
-			if err := store.CreateScanRun(ctx, run, []scanner.Item{item}); err != nil { t.Fatal(err) }
+			run := scanmodel.Run{ID: "scan-" + strings.ReplaceAll(tt.name, " ", "-"), AsOf: asOf,
+				StartedAt: asOf.Add(time.Minute), Status: scanmodel.RunRunning, TotalCount: 1}
+			item := scanmodel.Item{ScanID: run.ID, TsCode: "600519.SH", SecurityName: "贵州茅台",
+				Exchange: universe.ExchangeSSE, Status: scanmodel.ItemPending}
+			if err := store.CreateScanRun(ctx, run, []scanmodel.Item{item}); err != nil { t.Fatal(err) }
 
 			if tt.name != "缺失决策" && tt.name != "重复决策引用" {
 				decisionAsOf := tt.decisionAsOf
@@ -69,11 +69,11 @@ func TestGetScanResultJoinsAndValidatesOriginalDecisions(t *testing.T) {
 				if err := store.SaveStrategyDecision(ctx, decision); err != nil { t.Fatal(err) }
 			}
 
-			item.Status = scanner.ItemSuccess
+			item.Status = scanmodel.ItemSuccess
 			item.DataVersion = "data-v1"
 			item.DecisionIDs = tt.itemIDs
 			item.StartedAt, item.CompletedAt = run.StartedAt, run.StartedAt.Add(time.Second)
-			item.StrategyResults = []scanner.StrategyResult{{
+			item.StrategyResults = []scanmodel.StrategyResult{{
 				StrategyID: "chan3buy", StrategyStatus: "SUCCEEDED", PersistenceStatus: "SAVED",
 				DecisionID: tt.decisionID, AsOf: asOf, DataVersion: "data-v1",
 			}}

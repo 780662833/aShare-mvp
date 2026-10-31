@@ -7,15 +7,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/780662833/aShare-mvp/internal/scanner"
+	scanmodel "github.com/780662833/aShare-mvp/internal/scanner/model"
 	"github.com/780662833/aShare-mvp/internal/strategy/contract"
 )
 
 // ScanResult 将扫描快照、逐股结果与原始完整策略决策组合为只读结果。
 // Decisions 保留数据库中保存的完整 payload，不重新运行策略。
 type ScanResult struct {
-	Run       scanner.Run
-	Items     []scanner.Item
+	Run       scanmodel.Run
+	Items     []scanmodel.Item
 	Decisions []contract.StrategyDecision
 }
 
