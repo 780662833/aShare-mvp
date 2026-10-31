@@ -75,8 +75,8 @@ func printUsage() {
       初始化 SQLite 和 migrations
   sync-universe
       从 gotdx 获取证券名单并写入（上市状态保留 UNKNOWN）
-  sync-bars --ts-code 600519.SH [--count 250] [--freq all|D1|M60|M30]
-      获取并写入指定证券的前复权 K 线
+  sync-bars --ts-code 600519.SH | --all [--count 250] [--freq all|D1|M60|M30]
+      获取并写入指定证券或当前 ACTIVE 普通 A 股股票池的前复权 K 线
   import-reference --file reference.json
       导入经核验的证券主数据、每日状态和交易日历
   evaluate --ts-code 600519.SH --config runtime.json [--as-of RFC3339]
@@ -88,6 +88,8 @@ func printUsage() {
   history [--ts-code ...] [--strategy-id ...] [--status ...]
           [--from RFC3339] [--to RFC3339] [--limit 50] [--offset 0]
       查询历史策略决策
+  serve --config runtime.json [--addr 127.0.0.1:8080] [--scan-timeout 30m]
+      启动仅监听 localhost/loopback 的产品 HTTP API
 
 CZSC Python 服务需单独启动。策略参数必须通过 runtime.json 显式提供；
 程序不会把测试夹具参数当作实盘默认值。`)
