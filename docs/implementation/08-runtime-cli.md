@@ -40,11 +40,11 @@ gotdx adapter 当前没有提供本项目所需的交易所交易日历和逐日
 {
   "securities": [
     {
-      "TsCode": "600519.SH",
-      "Symbol": "600519",
-      "Name": "贵州茅台",
-      "Exchange": "SSE",
-      "ListStatus": "L"
+      "ts_code": "600519.SH",
+      "symbol": "600519",
+      "name": "贵州茅台",
+      "exchange": "SSE",
+      "list_status": "L"
     }
   ],
   "daily_states": [
@@ -95,7 +95,7 @@ go run ./cmd/ashare-mvp import-reference --file .\data\reference.json
 go run ./cmd/ashare-mvp evaluate --ts-code 600519.SH --config .\configs\runtime.json --as-of 2026-10-30T11:01:00+08:00
 ```
 
-单股评估会调用现有应用服务：读取 PIT 行情/证券状态/交易日历、按 profile 请求 CZSC、独立评估两套策略、分别保存决策，并输出两套策略结果和 DecisionID。CZSC URL、超时和可选 token 由配置提供；token 也可通过环境变量 `ASHARE_CZSC_TOKEN` 注入。
+省略 `--as-of` 时以本机当前时间作为决策时点；仅在对应历史数据的 `FetchedAt` 不晚于该时点时才可指定历史 `--as-of`。gotdx 实时抓取的历史 K 线，其采集时间是当前时刻，不能拿来伪造过去时点的 PIT 输入。单股评估会调用现有应用服务：读取 PIT 行情/证券状态/交易日历、按 profile 请求 CZSC、独立评估两套策略、分别保存决策，并输出两套策略结果和 DecisionID。CZSC URL、超时和可选 token 由配置提供；token 也可通过环境变量 `ASHARE_CZSC_TOKEN` 注入。
 
 ## 6. 扫描与历史查询
 
@@ -112,5 +112,5 @@ go run ./cmd/ashare-mvp history --ts-code 600519.SH --limit 50 --offset 0
 1. gotdx 提供当前证券名单和 K 线；本仓库当前没有自动获取交易日历、ST/停牌逐日状态的 Provider。该部分需导入可信参考数据。
 2. `sync-universe` 的上市状态为 UNKNOWN，不能直接用于全市场扫描；扫描股票池需要有来源依据的 ACTIVE 主数据。
 3. 目前扫描器的证券池是当前数据库 ACTIVE 股票池快照，不支持重建任意历史日期的全量证券池。
-4. 自动审查提出的扫描前 ST/停牌排除、context 取消传播和策略成功但决策保存失败分类提示仍需结合调用契约进一步核对；本 CLI 不宣称这些既有提示已修复。
+4. 自动审查提出的扫描前 ST/停牌排除、context 取消传播和策略成功但决策保存失败分类提示仍需结合调用契约进一步核对；本 CLI 不宣称这些既有提示已修复。全市场扫描前必须自行确认 ACTIVE 股票池和逐日状态数据准确，避免将 ST/停牌证券纳入扫描。
 5. 运行命令不等于实盘验证。应先用少量明确证券和可信历史快照验证数据质量，再扩大扫描范围。
