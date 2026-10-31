@@ -92,7 +92,7 @@ go run ./cmd/ashare-mvp import-reference --file .\data\reference.json
 
 ```powershell
 # 先启动另一个终端中的 CZSC 服务
-go run ./cmd/ashare-mvp evaluate --ts-code 600519.SH --config .\configs\runtime.json --as-of 2026-10-30T11:01:00+08:00
+go run ./cmd/ashare-mvp evaluate --ts-code 600519.SH --config .\\configs\\runtime.json
 ```
 
 省略 `--as-of` 时以本机当前时间作为决策时点；仅在对应历史数据的 `FetchedAt` 不晚于该时点时才可指定历史 `--as-of`。gotdx 实时抓取的历史 K 线，其采集时间是当前时刻，不能拿来伪造过去时点的 PIT 输入。单股评估会调用现有应用服务：读取 PIT 行情/证券状态/交易日历、按 profile 请求 CZSC、独立评估两套策略、分别保存决策，并输出两套策略结果和 DecisionID。CZSC URL、超时和可选 token 由配置提供；token 也可通过环境变量 `ASHARE_CZSC_TOKEN` 注入。
@@ -100,7 +100,7 @@ go run ./cmd/ashare-mvp evaluate --ts-code 600519.SH --config .\configs\runtime.
 ## 6. 扫描与历史查询
 
 ```powershell
-go run ./cmd/ashare-mvp scan --config .\configs\runtime.json --as-of 2026-10-30T15:01:00+08:00
+go run ./cmd/ashare-mvp scan --config .\\configs\\runtime.json
 go run ./cmd/ashare-mvp scan-result --scan-id scan-<实际返回的ID>
 go run ./cmd/ashare-mvp history --ts-code 600519.SH --limit 50 --offset 0
 ```
