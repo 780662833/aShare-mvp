@@ -7,8 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -18,7 +16,6 @@ import (
 	tdxtypes "github.com/bensema/gotdx/types"
 
 	appstrategy "github.com/780662833/aShare-mvp/internal/app/strategy"
-	"github.com/780662833/aShare-mvp/internal/httpapi"
 	"github.com/780662833/aShare-mvp/internal/czscclient"
 	gotdxadapter "github.com/780662833/aShare-mvp/internal/datahub/gotdx"
 	"github.com/780662833/aShare-mvp/internal/market/calendar"
