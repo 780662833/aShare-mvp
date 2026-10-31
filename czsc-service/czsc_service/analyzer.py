@@ -140,6 +140,35 @@ def _market_iso(value: Any) -> str:
     raise ValueError(f"CZSC 输出时间类型无效: {type(value).__name__}")
 
 
+def _czsc_signal_market_iso(value: Any) -> str:
+    """规范化 CZSC 信号 map 的 dt，保留市场墙上时间数值并标记 +08:00。
+
+    CZSC 将传入的 naive 市场时间按 UTC 类型编码；其 RFC3339 零偏移
+    只是内部编码，不代表需要换算为真实 UTC instant。这里只重标时区，
+    绝不调用 astimezone()，避免将 09:30 错误平移为 17:30。
+    """
+    if hasattr(value, "to_pydatetime"):
+        value = value.to_pydatetime()
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError(f"CZSC 信号时间格式无效: {value!r}") from exc
+    if not isinstance(value, datetime):
+        raise ValueError(f"CZSC 信号时间类型无效: {type(value).__name__}")
+
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=SHANGHAI_TZ)
+    else:
+        offset = value.utcoffset()
+        if offset == timedelta(0):
+            # CZSC 内部以 UTC 类型承载未换算的市场墙上时间数值。
+            value = value.replace(tzinfo=SHANGHAI_TZ)
+        elif offset != timedelta(hours=8):
+            raise ValueError("CZSC 信号时间只允许 naive、UTC 编码或 +08:00")
+    return value.isoformat()
+
+
 def _resolve_signal_profile(profile: Any, freq: str) -> tuple[str, dict[str, Any]]:
     name = str(profile or "structure_only").strip() or "structure_only"
     spec = SIGNAL_PROFILES.get(name)
@@ -208,7 +237,7 @@ def _signal_lifecycles(rows: Any, freq: str) -> dict[str, dict[str, Any]]:
             raise RuntimeError(f"CZSC 信号历史缺少 dt，无法确定 {key!r} 的起始时间")
         result[key] = {
             "age_bars": age_bars,
-            "started_at": _market_iso(started_at),
+            "started_at": _czsc_signal_market_iso(started_at),
         }
     return result
 
