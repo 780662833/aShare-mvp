@@ -149,7 +149,7 @@ func (s *Scanner) Run(ctx context.Context, asOf time.Time) (Run, error) {
 			run.FailedCount++
 		} else {
 			item.DataVersion = result.DataVersion
-			item.Status, item.DecisionIDs, item.ReasonCodes, item.ErrorMessage = classifyResult(result, item.TsCode, asOf)
+			item.Status, item.DecisionIDs, item.StrategyResults, item.ReasonCodes, item.ErrorMessage = classifyResult(result, item.TsCode, asOf)
 			switch item.Status {
 			case ItemSuccess:
 				run.SuccessCount++
@@ -200,21 +200,79 @@ func (s *Scanner) Run(ctx context.Context, asOf time.Time) (Run, error) {
 	return run, nil
 }
 
-func classifyResult(result appstrategy.Result, tsCode string, asOf time.Time) (ItemStatus, []string, []string, string) {
+func classifyResult(result appstrategy.Result, tsCode string, asOf time.Time) (ItemStatus, []string, []scanmodel.StrategyResult, []string, string) {
 	decisionIDs := make([]string, 0, 2)
+	strategyResults := make([]scanmodel.StrategyResult, 0, 2)
 	reasons := make([]string, 0)
-	if result.TsCode != tsCode || len(result.Decisions) != 2 || !result.AsOf.Equal(asOf) {
-		return ItemFailed, decisionIDs, reasons, "单股评估结果的证券、as_of 或双策略决策数量不符合契约"
+	if result.TsCode != tsCode || !result.AsOf.Equal(asOf) {
+		return ItemFailed, decisionIDs, strategyResults, reasons, "单股评估结果的证券或 as_of 不符合契约"
+	}
+	if len(result.StrategyResults) > 0 {
+		decisionByID := make(map[string]contract.StrategyDecision, len(result.Decisions))
+		for _, d := range result.Decisions {
+			if d.DecisionID == "" || d.TsCode != tsCode || !d.AsOf.Equal(asOf) {
+				return ItemFailed, decisionIDs, strategyResults, reasons, "已保存决策身份或时间不符合契约"
+			}
+			if _, ok := decisionByID[d.DecisionID]; ok {
+				return ItemFailed, decisionIDs, strategyResults, reasons, "重复 DecisionID"
+			}
+			decisionByID[d.DecisionID] = d
+		}
+		expected := map[string]bool{chan3buy.StrategyID:false, trendbreakout.StrategyID:false}
+		status, anySaved := ItemAnalysisError, false
+		for _, sr := range result.StrategyResults {
+			if _, ok := expected[sr.StrategyID]; !ok || expected[sr.StrategyID] {
+				return ItemFailed, decisionIDs, strategyResults, reasons, "未知或重复策略身份"
+			}
+			expected[sr.StrategyID] = true
+			if !sr.AsOf.Equal(asOf) || sr.DataVersion != result.DataVersion {
+				return ItemFailed, decisionIDs, strategyResults, reasons, "策略结果 as_of 或 data_version 不一致"
+			}
+			if sr.StrategyStatus != "SUCCEEDED" && sr.StrategyStatus != "FAILED" {
+				return ItemFailed, decisionIDs, strategyResults, reasons, "未知策略评估状态"
+			}
+			switch sr.PersistenceStatus {
+			case "SAVED":
+				d, ok := decisionByID[sr.DecisionID]
+				if !ok || d.StrategyID != sr.StrategyID {
+					return ItemFailed, decisionIDs, strategyResults, reasons, "缺少匹配的完整已保存决策"
+				}
+				decisionIDs = append(decisionIDs, sr.DecisionID)
+				reasons = append(reasons, d.ReasonCodes...)
+				anySaved = true
+				if d.Status == contract.StatusDataIncomplete { status = ItemDataIncomplete
+				} else if status != ItemDataIncomplete { status = ItemSuccess }
+			case "FAILED", "NOT_ATTEMPTED":
+				if sr.StrategyStatus == "SUCCEEDED" && sr.PersistenceStatus == "NOT_ATTEMPTED" {
+					return ItemFailed, decisionIDs, strategyResults, reasons, "策略成功但未执行持久化"
+				}
+			default:
+				return ItemFailed, decisionIDs, strategyResults, reasons, "未知策略持久化状态"
+			}
+			if sr.StrategyStatus == "FAILED" || sr.PersistenceStatus == "FAILED" { reasons = append(reasons, "STRATEGY_ERROR") }
+			strategyResults = append(strategyResults, scanmodel.StrategyResult{
+				StrategyID:sr.StrategyID, StrategyStatus:sr.StrategyStatus, PersistenceStatus:sr.PersistenceStatus,
+				DecisionID:sr.DecisionID, AsOf:sr.AsOf, DataVersion:sr.DataVersion, ErrorMessage:sr.ErrorMessage,
+			})
+		}
+		if !expected[chan3buy.StrategyID] || !expected[trendbreakout.StrategyID] {
+			return ItemFailed, decisionIDs, strategyResults, reasons, "缺少独立策略结果"
+		}
+		if !anySaved { status = ItemAnalysisError }
+		return status, decisionIDs, strategyResults, uniqueStrings(reasons), ""
+	}
+	if len(result.Decisions) != 2 {
+		return ItemFailed, decisionIDs, strategyResults, reasons, "单股评估结果缺少双策略决策"
 	}
 	seenStrategies := map[string]struct{}{}
 	status := ItemSuccess
 	for _, decision := range result.Decisions {
 		if decision.TsCode != tsCode || !decision.AsOf.Equal(asOf) ||
 			strings.TrimSpace(decision.DecisionID) == "" || strings.TrimSpace(decision.StrategyID) == "" {
-			return ItemFailed, decisionIDs, reasons, "单股评估返回的策略决策标识或时间不符合契约"
+			return ItemFailed, decisionIDs, strategyResults, reasons, "单股评估返回的策略决策标识或时间不符合契约"
 		}
 		if _, exists := seenStrategies[decision.StrategyID]; exists {
-			return ItemFailed, decisionIDs, reasons, "单股评估返回重复策略决策"
+			return ItemFailed, decisionIDs, strategyResults, reasons, "单股评估返回重复策略决策"
 		}
 		seenStrategies[decision.StrategyID] = struct{}{}
 		decisionIDs = append(decisionIDs, decision.DecisionID)
@@ -240,7 +298,7 @@ func classifyResult(result appstrategy.Result, tsCode string, asOf time.Time) (I
 	if _, ok := seenStrategies[trendbreakout.StrategyID]; !ok {
 		return ItemFailed, decisionIDs, uniqueStrings(reasons), "单股评估缺少趋势突破决策"
 	}
-	return status, decisionIDs, uniqueStrings(reasons), ""
+	return status, decisionIDs, strategyResults, uniqueStrings(reasons), ""
 }
 
 func uniqueStrings(values []string) []string {

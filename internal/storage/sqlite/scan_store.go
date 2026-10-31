@@ -61,11 +61,15 @@ func (s *Store) UpdateScanRunItem(ctx context.Context, item scanmodel.Item) erro
 	if err != nil {
 		return fmt.Errorf("序列化策略原因失败: %w", err)
 	}
+	strategyResults, err := json.Marshal(item.StrategyResults)
+	if err != nil {
+		return fmt.Errorf("序列化独立策略结果失败: %w", err)
+	}
 	result, err := s.db.ExecContext(ctx, `UPDATE scan_run_items SET
-		status = ?, data_version = ?, decision_ids = ?, reason_codes = ?,
+		status = ?, data_version = ?, decision_ids = ?, strategy_results = ?, reason_codes = ?,
 		error_message = ?, started_at = ?, completed_at = ?
 		WHERE scan_id = ? AND ts_code = ? AND status = ?`,
-		string(item.Status), item.DataVersion, string(decisionIDs), string(reasonCodes),
+		string(item.Status), item.DataVersion, string(decisionIDs), string(strategyResults), string(reasonCodes),
 		item.ErrorMessage, item.StartedAt.Format(time.RFC3339Nano),
 		item.CompletedAt.Format(time.RFC3339Nano), item.ScanID, item.TsCode,
 		string(scanmodel.ItemPending))
@@ -189,7 +193,7 @@ func (s *Store) GetScanRun(ctx context.Context, scanID string) (scanmodel.Run, e
 
 func (s *Store) ListScanRunItems(ctx context.Context, scanID string) ([]scanmodel.Item, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT scan_id, ts_code, security_name, exchange,
-		list_date, delist_date, status, data_version, decision_ids, reason_codes,
+		list_date, delist_date, status, data_version, decision_ids, strategy_results, reason_codes,
 		error_message, started_at, completed_at
 		FROM scan_run_items WHERE scan_id = ? ORDER BY ts_code ASC`, scanID)
 	if err != nil {
@@ -202,13 +206,16 @@ func (s *Store) ListScanRunItems(ctx context.Context, scanID string) ([]scanmode
 		var exchange, status, decisionIDs, reasonCodes, startedAt, completedAt string
 		if err := rows.Scan(&item.ScanID, &item.TsCode, &item.SecurityName, &exchange,
 			&item.ListDate, &item.DelistDate, &status, &item.DataVersion,
-			&decisionIDs, &reasonCodes, &item.ErrorMessage, &startedAt, &completedAt); err != nil {
+			&decisionIDs, &strategyResults, &reasonCodes, &item.ErrorMessage, &startedAt, &completedAt); err != nil {
 			return nil, err
 		}
 		item.Exchange = universe.Exchange(exchange)
 		item.Status = scanmodel.ItemStatus(status)
 		if err := json.Unmarshal([]byte(decisionIDs), &item.DecisionIDs); err != nil {
 			return nil, fmt.Errorf("解析扫描决策标识失败: %w", err)
+		}
+		if err := json.Unmarshal([]byte(strategyResults), &item.StrategyResults); err != nil {
+			return nil, fmt.Errorf("解析独立策略结果失败: %w", err)
 		}
 		if err := json.Unmarshal([]byte(reasonCodes), &item.ReasonCodes); err != nil {
 			return nil, fmt.Errorf("解析扫描原因失败: %w", err)

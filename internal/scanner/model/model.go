@@ -41,6 +41,16 @@ type Run struct {
 	ErrorMessage        string
 }
 
+type StrategyResult struct {
+	StrategyID string `json:"strategy_id"`
+	StrategyStatus string `json:"strategy_status"`
+	PersistenceStatus string `json:"persistence_status"`
+	DecisionID string `json:"decision_id,omitempty"`
+	AsOf time.Time `json:"as_of"`
+	DataVersion string `json:"data_version"`
+	ErrorMessage string `json:"error_message,omitempty"`
+}
+
 type Item struct {
 	ScanID       string
 	TsCode       string
@@ -51,6 +61,7 @@ type Item struct {
 	Status       ItemStatus
 	DataVersion  string
 	DecisionIDs  []string
+	StrategyResults []StrategyResult
 	ReasonCodes  []string
 	ErrorMessage string
 	StartedAt    time.Time

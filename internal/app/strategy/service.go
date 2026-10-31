@@ -49,12 +49,23 @@ type Service struct {
 	trendStrategy *trendbreakout.Strategy
 }
 
+type StrategyResult struct {
+	StrategyID string `json:"strategy_id"`
+	StrategyStatus string `json:"strategy_status"`
+	PersistenceStatus string `json:"persistence_status"`
+	DecisionID string `json:"decision_id,omitempty"`
+	AsOf time.Time `json:"as_of"`
+	DataVersion string `json:"data_version"`
+	ErrorMessage string `json:"error_message,omitempty"`
+}
+
 type Result struct {
 	TsCode string `json:"ts_code"`
 	AsOf time.Time `json:"as_of"`
 	DataVersion string `json:"data_version"`
 	MarketStatus contract.MarketStatus `json:"market_status"`
 	Decisions []contract.StrategyDecision `json:"decisions"`
+	StrategyResults []StrategyResult `json:"strategy_results"`
 }
 
 type profileRequest struct {
@@ -104,7 +115,7 @@ func New(repo Repository, analyzer Analyzer, config Config) (*Service, error) {
 // EvaluateSymbol 在指定 as_of 时点对单只股票执行一次双策略评估。
 // 按 as_of 与交易时段分别校验 D1/M60/M30 最新完整 K 线；允许盘中较短周期先于较长周期确认。
 func (s *Service) EvaluateSymbol(ctx context.Context, tsCode string, asOf time.Time) (Result, error) {
-	result := Result{TsCode: tsCode, Decisions: make([]contract.StrategyDecision, 0, 2)}
+	result := Result{TsCode: tsCode, Decisions: make([]contract.StrategyDecision, 0, 2), StrategyResults: make([]StrategyResult, 0, 2)}
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
@@ -230,38 +241,45 @@ func (s *Service) EvaluateSymbol(ctx context.Context, tsCode string, asOf time.T
 		}
 	}
 
-	previousChan, prevChanErr := s.repo.GetLatestStrategyDecisionBefore(ctx, tsCode, chan3buy.StrategyID, asOf)
-	if prevChanErr == nil {
-		input.PreviousDecision = &previousChan
-	} else if prevChanErr != sql.ErrNoRows {
-		return result, fmt.Errorf("读取三买上一条决策失败: %w", prevChanErr)
-	}
-	chanDecision, err := s.chanStrategy.Evaluate(ctx, input)
-	if err != nil {
-		return result, fmt.Errorf("评估缠论三买失败: %w", err)
-	}
-	if err := s.repo.SaveStrategyDecision(ctx, chanDecision); err != nil {
-		return result, fmt.Errorf("保存缠论三买决策失败: %w", err)
-	}
-
-	input.PreviousDecision = nil
-	previousTrend, prevTrendErr := s.repo.GetLatestStrategyDecisionBefore(ctx, tsCode, trendbreakout.StrategyID, asOf)
-	if prevTrendErr == nil {
-		input.PreviousDecision = &previousTrend
-	} else if prevTrendErr != sql.ErrNoRows {
-		return result, fmt.Errorf("读取趋势突破上一条决策失败: %w", prevTrendErr)
-	}
-	trendDecision, err := s.trendStrategy.Evaluate(ctx, input)
-	if err != nil {
-		return result, fmt.Errorf("评估趋势突破失败: %w", err)
-	}
-	if err := s.repo.SaveStrategyDecision(ctx, trendDecision); err != nil {
-		return result, fmt.Errorf("保存趋势突破决策失败: %w", err)
-	}
-
 	result.DataVersion = input.DataVersion
 	result.MarketStatus = input.MarketContext.Status
-	result.Decisions = append(result.Decisions, chanDecision, trendDecision)
+
+	// 两套策略分别读取自身历史、独立评估和保存；任何单套失败都不阻断另一套。
+	evaluateAndSave := func(strategyID string, evaluate func(context.Context, contract.StrategyInput) (contract.StrategyDecision, error)) {
+		sr := StrategyResult{StrategyID: strategyID, StrategyStatus: "NOT_EVALUATED",
+			PersistenceStatus: "NOT_ATTEMPTED", AsOf: asOf, DataVersion: input.DataVersion}
+		strategyInput := input
+		strategyInput.PreviousDecision = nil
+		previous, previousErr := s.repo.GetLatestStrategyDecisionBefore(ctx, tsCode, strategyID, asOf)
+		if previousErr == nil {
+			strategyInput.PreviousDecision = &previous
+		} else if previousErr != sql.ErrNoRows {
+			sr.StrategyStatus = "FAILED"
+			sr.ErrorMessage = fmt.Sprintf("读取上一条决策失败: %v", previousErr)
+			result.StrategyResults = append(result.StrategyResults, sr)
+			return
+		}
+		decision, evalErr := evaluate(ctx, strategyInput)
+		if evalErr != nil {
+			sr.StrategyStatus = "FAILED"
+			sr.ErrorMessage = fmt.Sprintf("策略评估失败: %v", evalErr)
+			result.StrategyResults = append(result.StrategyResults, sr)
+			return
+		}
+		sr.StrategyStatus = "SUCCEEDED"
+		sr.DecisionID = decision.DecisionID
+		if saveErr := s.repo.SaveStrategyDecision(ctx, decision); saveErr != nil {
+			sr.PersistenceStatus = "FAILED"
+			sr.ErrorMessage = fmt.Sprintf("保存策略决策失败: %v", saveErr)
+			result.StrategyResults = append(result.StrategyResults, sr)
+			return
+		}
+		sr.PersistenceStatus = "SAVED"
+		result.Decisions = append(result.Decisions, decision)
+		result.StrategyResults = append(result.StrategyResults, sr)
+	}
+	evaluateAndSave(chan3buy.StrategyID, s.chanStrategy.Evaluate)
+	evaluateAndSave(trendbreakout.StrategyID, s.trendStrategy.Evaluate)
 	return result, nil
 }
 
@@ -368,6 +386,7 @@ func (s *Service) saveAnalysisError(ctx context.Context, result Result, input co
 		contract.NewDecision(input, s.chanStrategy.ID(), s.chanStrategy.Version(), s.config.Chan3Buy.Version),
 		contract.NewDecision(input, s.trendStrategy.ID(), s.trendStrategy.Version(), s.config.TrendBreakout.Version),
 	}
+	strategyIDs := []string{s.chanStrategy.ID(), s.trendStrategy.ID()}
 	for i := range decisions {
 		decisions[i].Status = contract.StatusAnalysisError
 		contract.AppendReason(&decisions[i], "CZSC_ANALYSIS_FAILED")
@@ -378,11 +397,17 @@ func (s *Service) saveAnalysisError(ctx context.Context, result Result, input co
 			Source: "CZSC HTTP/JSON client",
 			Confidence: contract.GradeHigh,
 		})
+		sr := StrategyResult{StrategyID: strategyIDs[i], StrategyStatus: "FAILED", PersistenceStatus: "NOT_ATTEMPTED",
+			DecisionID: decisions[i].DecisionID, AsOf: result.AsOf, DataVersion: result.DataVersion, ErrorMessage: cause.Error()}
 		if err := s.repo.SaveStrategyDecision(ctx, decisions[i]); err != nil {
-			return result, fmt.Errorf("保存 CZSC 分析错误决策失败: %w (原始错误: %v)", err, cause)
+			sr.PersistenceStatus = "FAILED"
+			sr.ErrorMessage = fmt.Sprintf("CZSC 错误决策保存失败: %v; 原因: %v", err, cause)
+		} else {
+			sr.PersistenceStatus = "SAVED"
+			result.Decisions = append(result.Decisions, decisions[i])
 		}
+		result.StrategyResults = append(result.StrategyResults, sr)
 	}
-	result.Decisions = decisions
 	return result, nil
 }
 
