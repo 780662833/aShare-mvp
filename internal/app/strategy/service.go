@@ -160,6 +160,9 @@ func (s *Service) EvaluateSymbol(ctx context.Context, tsCode string, asOf time.T
 		marketdata.FrequencyM60,
 		marketdata.FrequencyM30,
 	}
+	var canonicalSource string
+	var canonicalAdjust marketdata.AdjustMode
+	hasCanonicalSeries := false
 	for _, frequency := range frequencies {
 		bars, readErr := s.repo.ListRecentBars(ctx, tsCode, frequency, s.config.AdjustMode, asOf, s.config.HistoryBars)
 		if readErr != nil {
@@ -171,6 +174,20 @@ func (s *Service) EvaluateSymbol(ctx context.Context, tsCode string, asOf time.T
 			continue
 		}
 		input.Bars[frequency] = bars
+		if len(bars) > 0 {
+			if !hasCanonicalSeries {
+				canonicalSource = bars[0].Source
+				canonicalAdjust = bars[0].AdjustMode
+				hasCanonicalSeries = true
+			} else {
+				if bars[0].Source != canonicalSource {
+					issues = append(issues, "CROSS_FREQUENCY_SOURCE_MISMATCH")
+				}
+				if bars[0].AdjustMode != canonicalAdjust {
+					issues = append(issues, "CROSS_FREQUENCY_ADJUSTMENT_MISMATCH")
+				}
+			}
+		}
 		if err := marketdata.ValidateBatch(bars); err != nil {
 			issues = append(issues, "BARS_"+string(frequency)+"_INVALID")
 		}
