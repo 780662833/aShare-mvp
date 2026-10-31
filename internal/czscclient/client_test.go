@@ -244,8 +244,8 @@ func TestAnalyzePreservesAndValidatesPerSignalLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	bars := []marketdata.Bar{
-		completeBar(marketdata.ShanghaiWallTime(2026, 10, 30, 9, 0)),
 		completeBar(marketdata.ShanghaiWallTime(2026, 10, 30, 10, 0)),
+		completeBar(marketdata.ShanghaiWallTime(2026, 10, 30, 10, 30)),
 		completeBar(marketdata.ShanghaiWallTime(2026, 10, 30, 11, 0)),
 	}
 	request, err := BuildRequestWithProfile(bars, SignalProfileChan3BuyM30)
