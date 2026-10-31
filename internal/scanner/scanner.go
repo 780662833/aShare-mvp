@@ -240,8 +240,14 @@ func classifyResult(result appstrategy.Result, tsCode string, asOf time.Time) (I
 				decisionIDs = append(decisionIDs, sr.DecisionID)
 				reasons = append(reasons, d.ReasonCodes...)
 				anySaved = true
-				if d.Status == contract.StatusDataIncomplete { status = ItemDataIncomplete
-				} else if status != ItemDataIncomplete { status = ItemSuccess }
+				switch d.Status {
+				case contract.StatusDataIncomplete:
+					status = ItemDataIncomplete
+				case contract.StatusAnalysisError:
+					if status != ItemDataIncomplete { status = ItemAnalysisError }
+				default:
+					if status != ItemDataIncomplete && status != ItemAnalysisError { status = ItemSuccess }
+				}
 			case "FAILED", "NOT_ATTEMPTED":
 				if sr.StrategyStatus == "SUCCEEDED" && sr.PersistenceStatus == "NOT_ATTEMPTED" {
 					return ItemFailed, decisionIDs, strategyResults, reasons, "策略成功但未执行持久化"
