@@ -185,7 +185,8 @@ func (s *Store) GetScanRun(ctx context.Context, scanID string) (scanmodel.Run, e
  // 已完成逐股结果保留，未处理项继续保留 PENDING，不伪造为失败或成功。
  func (s *Store) RecoverInterruptedScanRuns(ctx context.Context, completedAt time.Time) (int64, error) {
  	if completedAt.IsZero() { return 0, fmt.Errorf("恢复扫描任务的完成时间不能为空") }
- 	tx, err := s.db.BeginTx(ctx, nil)
+	stamp := completedAt.Format(time.RFC3339Nano)
+	tx, err := s.db.BeginTx(ctx, nil)
  	if err != nil { return 0, err }
  	defer tx.Rollback()
   	result, err := tx.ExecContext(ctx, `UPDATE scan_runs SET
@@ -195,7 +196,7 @@ func (s *Store) GetScanRun(ctx context.Context, scanID string) (scanmodel.Run, e
  		analysis_error_count = (SELECT COUNT(*) FROM scan_run_items i WHERE i.scan_id = scan_runs.scan_id AND i.status = 'ANALYSIS_ERROR'),
  		failed_count = (SELECT COUNT(*) FROM scan_run_items i WHERE i.scan_id = scan_runs.scan_id AND i.status = 'FAILED'),
  		error_message = '服务进程在扫描完成前退出；任务已恢复标记为 CANCELLED'
- 		WHERE status = 'RUNNING'`)
+ 		WHERE status = 'RUNNING'`, stamp)
  	if err != nil { return 0, fmt.Errorf("恢复中断扫描任务失败: %w", err) }
  	count, err := result.RowsAffected()
  	if err != nil { return 0, err }
