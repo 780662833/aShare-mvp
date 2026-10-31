@@ -7,12 +7,12 @@ import (
 	"time"
 
 	"github.com/780662833/aShare-mvp/internal/market/universe"
-	"github.com/780662833/aShare-mvp/internal/scanner"
+	scanmodel "github.com/780662833/aShare-mvp/internal/scanner/model"
 )
 
-func (s *Store) CreateScanRun(ctx context.Context, run scanner.Run, items []scanner.Item) error {
+func (s *Store) CreateScanRun(ctx context.Context, run scanmodel.Run, items []scanmodel.Item) error {
 	if run.ID == "" || run.AsOf.IsZero() || run.StartedAt.IsZero() ||
-		run.Status != scanner.RunRunning || run.TotalCount != len(items) {
+		run.Status != scanmodel.RunRunning || run.TotalCount != len(items) {
 		return fmt.Errorf("扫描运行初始化参数无效")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -30,7 +30,7 @@ func (s *Store) CreateScanRun(ctx context.Context, run scanner.Run, items []scan
 	}
 	for _, item := range items {
 		if item.ScanID != run.ID || item.TsCode == "" ||
-			item.Status != scanner.ItemPending {
+			item.Status != scanmodel.ItemPending {
 			_ = tx.Rollback()
 			return fmt.Errorf("扫描证券初始化记录无效: %s", item.TsCode)
 		}
@@ -48,8 +48,8 @@ func (s *Store) CreateScanRun(ctx context.Context, run scanner.Run, items []scan
 	return tx.Commit()
 }
 
-func (s *Store) UpdateScanRunItem(ctx context.Context, item scanner.Item) error {
-	if item.ScanID == "" || item.TsCode == "" || item.Status == scanner.ItemPending ||
+func (s *Store) UpdateScanRunItem(ctx context.Context, item scanmodel.Item) error {
+	if item.ScanID == "" || item.TsCode == "" || item.Status == scanmodel.ItemPending ||
 		item.StartedAt.IsZero() || item.CompletedAt.IsZero() {
 		return fmt.Errorf("扫描证券结果参数无效")
 	}
@@ -68,7 +68,7 @@ func (s *Store) UpdateScanRunItem(ctx context.Context, item scanner.Item) error 
 		string(item.Status), item.DataVersion, string(decisionIDs), string(reasonCodes),
 		item.ErrorMessage, item.StartedAt.Format(time.RFC3339Nano),
 		item.CompletedAt.Format(time.RFC3339Nano), item.ScanID, item.TsCode,
-		string(scanner.ItemPending))
+		string(scanmodel.ItemPending))
 	if err != nil {
 		return fmt.Errorf("更新证券扫描结果失败: %w", err)
 	}
@@ -82,10 +82,10 @@ func (s *Store) UpdateScanRunItem(ctx context.Context, item scanner.Item) error 
 	return nil
 }
 
-func (s *Store) CompleteScanRun(ctx context.Context, run scanner.Run) error {
+func (s *Store) CompleteScanRun(ctx context.Context, run scanmodel.Run) error {
 	if run.ID == "" || run.CompletedAt.IsZero() ||
-		(run.Status != scanner.RunCompleted && run.Status != scanner.RunPartial &&
-			run.Status != scanner.RunFailed && run.Status != scanner.RunCancelled) {
+		(run.Status != scanmodel.RunCompleted && run.Status != scanmodel.RunPartial &&
+			run.Status != scanmodel.RunFailed && run.Status != scanmodel.RunCancelled) {
 		return fmt.Errorf("扫描运行终态参数无效")
 	}
 	processed := run.SuccessCount + run.DataIncompleteCount + run.AnalysisErrorCount + run.FailedCount
@@ -93,16 +93,16 @@ func (s *Store) CompleteScanRun(ctx context.Context, run scanner.Run) error {
 		return fmt.Errorf("扫描运行汇总计数超过总数")
 	}
 	switch run.Status {
-	case scanner.RunCompleted:
+	case scanmodel.RunCompleted:
 		if run.SuccessCount != run.TotalCount || run.DataIncompleteCount != 0 ||
 			run.AnalysisErrorCount != 0 || run.FailedCount != 0 {
 			return fmt.Errorf("COMPLETED 扫描必须全部成功")
 		}
-	case scanner.RunPartial:
+	case scanmodel.RunPartial:
 		if run.SuccessCount == 0 || processed != run.TotalCount {
 			return fmt.Errorf("PARTIAL_SUCCESS 扫描必须有成功项且所有证券均已处理")
 		}
-	case scanner.RunFailed:
+	case scanmodel.RunFailed:
 		if run.SuccessCount != 0 || processed != run.TotalCount {
 			return fmt.Errorf("FAILED 扫描必须无成功项且所有证券均已处理")
 		}
@@ -130,7 +130,7 @@ func (s *Store) CompleteScanRun(ctx context.Context, run scanner.Run) error {
 		_ = tx.Rollback()
 		return fmt.Errorf("扫描汇总与逐股明细不一致")
 	}
-	if run.Status != scanner.RunCancelled && pending != 0 {
+	if run.Status != scanmodel.RunCancelled && pending != 0 {
 		_ = tx.Rollback()
 		return fmt.Errorf("非取消扫描仍存在未处理证券")
 	}
@@ -140,7 +140,7 @@ func (s *Store) CompleteScanRun(ctx context.Context, run scanner.Run) error {
 		WHERE scan_id = ? AND status = ? AND total_count = ?`,
 		run.CompletedAt.Format(time.RFC3339Nano), string(run.Status), run.SuccessCount,
 		run.DataIncompleteCount, run.AnalysisErrorCount, run.FailedCount,
-		run.ErrorMessage, run.ID, string(scanner.RunRunning), run.TotalCount)
+		run.ErrorMessage, run.ID, string(scanmodel.RunRunning), run.TotalCount)
 	if err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("完成扫描运行记录失败: %w", err)
@@ -157,8 +157,8 @@ func (s *Store) CompleteScanRun(ctx context.Context, run scanner.Run) error {
 	return tx.Commit()
 }
 
-func (s *Store) GetScanRun(ctx context.Context, scanID string) (scanner.Run, error) {
-	var run scanner.Run
+func (s *Store) GetScanRun(ctx context.Context, scanID string) (scanmodel.Run, error) {
+	var run scanmodel.Run
 	var asOf, startedAt, completedAt, status string
 	err := s.db.QueryRowContext(ctx, `SELECT scan_id, as_of, started_at, completed_at, status,
 		total_count, success_count, data_incomplete_count, analysis_error_count, failed_count,
@@ -167,27 +167,27 @@ func (s *Store) GetScanRun(ctx context.Context, scanID string) (scanner.Run, err
 		&run.TotalCount, &run.SuccessCount, &run.DataIncompleteCount, &run.AnalysisErrorCount,
 		&run.FailedCount, &run.ErrorMessage)
 	if err != nil {
-		return scanner.Run{}, err
+		return scanmodel.Run{}, err
 	}
 	run.AsOf, err = time.Parse(time.RFC3339Nano, asOf)
 	if err != nil {
-		return scanner.Run{}, fmt.Errorf("解析扫描 as_of 失败: %w", err)
+		return scanmodel.Run{}, fmt.Errorf("解析扫描 as_of 失败: %w", err)
 	}
 	run.StartedAt, err = time.Parse(time.RFC3339Nano, startedAt)
 	if err != nil {
-		return scanner.Run{}, fmt.Errorf("解析扫描 started_at 失败: %w", err)
+		return scanmodel.Run{}, fmt.Errorf("解析扫描 started_at 失败: %w", err)
 	}
 	if completedAt != "" {
 		run.CompletedAt, err = time.Parse(time.RFC3339Nano, completedAt)
 		if err != nil {
-			return scanner.Run{}, fmt.Errorf("解析扫描 completed_at 失败: %w", err)
+			return scanmodel.Run{}, fmt.Errorf("解析扫描 completed_at 失败: %w", err)
 		}
 	}
-	run.Status = scanner.RunStatus(status)
+	run.Status = scanmodel.RunStatus(status)
 	return run, nil
 }
 
-func (s *Store) ListScanRunItems(ctx context.Context, scanID string) ([]scanner.Item, error) {
+func (s *Store) ListScanRunItems(ctx context.Context, scanID string) ([]scanmodel.Item, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT scan_id, ts_code, security_name, exchange,
 		list_date, delist_date, status, data_version, decision_ids, reason_codes,
 		error_message, started_at, completed_at
@@ -196,9 +196,9 @@ func (s *Store) ListScanRunItems(ctx context.Context, scanID string) ([]scanner.
 		return nil, err
 	}
 	defer rows.Close()
-	items := make([]scanner.Item, 0)
+	items := make([]scanmodel.Item, 0)
 	for rows.Next() {
-		var item scanner.Item
+		var item scanmodel.Item
 		var exchange, status, decisionIDs, reasonCodes, startedAt, completedAt string
 		if err := rows.Scan(&item.ScanID, &item.TsCode, &item.SecurityName, &exchange,
 			&item.ListDate, &item.DelistDate, &status, &item.DataVersion,
@@ -206,7 +206,7 @@ func (s *Store) ListScanRunItems(ctx context.Context, scanID string) ([]scanner.
 			return nil, err
 		}
 		item.Exchange = universe.Exchange(exchange)
-		item.Status = scanner.ItemStatus(status)
+		item.Status = scanmodel.ItemStatus(status)
 		if err := json.Unmarshal([]byte(decisionIDs), &item.DecisionIDs); err != nil {
 			return nil, fmt.Errorf("解析扫描决策标识失败: %w", err)
 		}

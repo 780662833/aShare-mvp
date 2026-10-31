@@ -13,6 +13,7 @@ import (
 
 	tdxtypes "github.com/bensema/gotdx/types"
 	appstrategy "github.com/780662833/aShare-mvp/internal/app/strategy"
+	scanmodel "github.com/780662833/aShare-mvp/internal/scanner/model"
 	"github.com/780662833/aShare-mvp/internal/market/universe"
 	"github.com/780662833/aShare-mvp/internal/marketdata"
 	"github.com/780662833/aShare-mvp/internal/strategy/chan3buy"
@@ -20,55 +21,29 @@ import (
 	"github.com/780662833/aShare-mvp/internal/strategy/trendbreakout"
 )
 
-type RunStatus string
+// 扫描持久化模型放在独立子包，避免 SQLite 与扫描编排形成循环依赖。
+type RunStatus = scanmodel.RunStatus
 
 const (
-	RunRunning   RunStatus = "RUNNING"
-	RunCompleted RunStatus = "COMPLETED"
-	RunPartial   RunStatus = "PARTIAL_SUCCESS"
-	RunFailed    RunStatus = "FAILED"
-	RunCancelled RunStatus = "CANCELLED"
+	RunRunning   = scanmodel.RunRunning
+	RunCompleted = scanmodel.RunCompleted
+	RunPartial   = scanmodel.RunPartial
+	RunFailed    = scanmodel.RunFailed
+	RunCancelled = scanmodel.RunCancelled
 )
 
-type ItemStatus string
+type ItemStatus = scanmodel.ItemStatus
 
 const (
-	ItemPending        ItemStatus = "PENDING"
-	ItemSuccess        ItemStatus = "SUCCESS"
-	ItemDataIncomplete ItemStatus = "DATA_INCOMPLETE"
-	ItemAnalysisError  ItemStatus = "ANALYSIS_ERROR"
-	ItemFailed         ItemStatus = "FAILED"
+	ItemPending        = scanmodel.ItemPending
+	ItemSuccess        = scanmodel.ItemSuccess
+	ItemDataIncomplete = scanmodel.ItemDataIncomplete
+	ItemAnalysisError  = scanmodel.ItemAnalysisError
+	ItemFailed         = scanmodel.ItemFailed
 )
 
-type Run struct {
-	ID                  string
-	AsOf                time.Time
-	StartedAt           time.Time
-	CompletedAt         time.Time
-	Status              RunStatus
-	TotalCount          int
-	SuccessCount        int
-	DataIncompleteCount int
-	AnalysisErrorCount  int
-	FailedCount         int
-	ErrorMessage        string
-}
-
-type Item struct {
-	ScanID       string
-	TsCode       string
-	SecurityName string
-	Exchange     universe.Exchange
-	ListDate     string
-	DelistDate   string
-	Status       ItemStatus
-	DataVersion  string
-	DecisionIDs  []string
-	ReasonCodes  []string
-	ErrorMessage string
-	StartedAt    time.Time
-	CompletedAt  time.Time
-}
+type Run = scanmodel.Run
+type Item = scanmodel.Item
 
 type Repository interface {
 	ListActiveStockBasics(context.Context) ([]universe.StockBasic, error)
