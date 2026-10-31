@@ -188,8 +188,7 @@ func (s *Store) GetScanRun(ctx context.Context, scanID string) (scanmodel.Run, e
  	tx, err := s.db.BeginTx(ctx, nil)
  	if err != nil { return 0, err }
  	defer tx.Rollback()
- 	stamp := completedAt.Format(time.RFC3339Nano)
- 	result, err := tx.ExecContext(ctx, `UPDATE scan_runs SET
+  	result, err := tx.ExecContext(ctx, `UPDATE scan_runs SET
  		completed_at = ?, status = 'CANCELLED',
  		success_count = (SELECT COUNT(*) FROM scan_run_items i WHERE i.scan_id = scan_runs.scan_id AND i.status = 'SUCCESS'),
  		data_incomplete_count = (SELECT COUNT(*) FROM scan_run_items i WHERE i.scan_id = scan_runs.scan_id AND i.status = 'DATA_INCOMPLETE'),
