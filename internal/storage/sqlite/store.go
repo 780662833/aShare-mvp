@@ -639,6 +639,18 @@ func (s *Store) SaveStrategyDecision(ctx context.Context, decision contract.Stra
 	return nil
 }
 
+
+// GetStrategyDecision 按 DecisionID 读取保存时的完整策略决策。
+func (s *Store) GetStrategyDecision(ctx context.Context, decisionID string) (contract.StrategyDecision, error) {
+	if strings.TrimSpace(decisionID) == "" { return contract.StrategyDecision{}, fmt.Errorf("decision_id 不能为空") }
+	var payload string
+	if err := s.db.QueryRowContext(ctx, "SELECT payload FROM strategy_decisions WHERE decision_id = ?", decisionID).Scan(&payload); err != nil { return contract.StrategyDecision{}, err }
+	var decision contract.StrategyDecision
+	if err := json.Unmarshal([]byte(payload), &decision); err != nil { return contract.StrategyDecision{}, fmt.Errorf("解析策略决策 %s payload 失败: %w", decisionID, err) }
+	if decision.DecisionID != decisionID { return contract.StrategyDecision{}, fmt.Errorf("策略决策索引与 payload 标识不一致: %s", decisionID) }
+	return decision, nil
+}
+
 // GetLatestStrategyDecisionBefore 读取指定时点之前最近一条策略结论。
 // 不读取相同 as_of 的结论，避免重放同一快照时把自身当作 PreviousDecision。
 func (s *Store) GetLatestStrategyDecisionBefore(ctx context.Context, tsCode, strategyID string, asOf time.Time) (contract.StrategyDecision, error) {

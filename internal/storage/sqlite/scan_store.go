@@ -179,6 +179,55 @@ func (s *Store) GetScanRun(ctx context.Context, scanID string) (scanmodel.Run, e
 	return run, nil
 }
 
+
+// ListScanRunItemsPage 按证券代码稳定排序分页读取扫描项。
+func (s *Store) ListScanRunItemsPage(ctx context.Context, scanID string, limit, offset int) ([]scanmodel.Item, int64, error) {
+	if scanID == "" || limit < 1 || limit > 200 || offset < 0 { return nil, 0, fmt.Errorf("扫描项分页参数无效") }
+	var total int64
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM scan_run_items WHERE scan_id = ?", scanID).Scan(&total); err != nil { return nil, 0, err }
+	rows, err := s.db.QueryContext(ctx, `SELECT scan_id, ts_code, security_name, exchange, list_date, delist_date, status, data_version, decision_ids, strategy_results, reason_codes, error_message, started_at, completed_at FROM scan_run_items WHERE scan_id = ? ORDER BY ts_code ASC LIMIT ? OFFSET ?`, scanID, limit, offset)
+	if err != nil { return nil, 0, err }; defer rows.Close()
+	items := make([]scanmodel.Item, 0, limit)
+	for rows.Next() {
+		var item scanmodel.Item; var exchange, status, ids, strategies, reasons, startedAt, completedAt string
+		if err := rows.Scan(&item.ScanID, &item.TsCode, &item.SecurityName, &exchange, &item.ListDate, &item.DelistDate, &status, &item.DataVersion, &ids, &strategies, &reasons, &item.ErrorMessage, &startedAt, &completedAt); err != nil { return nil, 0, err }
+		item.Exchange = universe.Exchange(exchange); item.Status = scanmodel.ItemStatus(status)
+		if err := json.Unmarshal([]byte(ids), &item.DecisionIDs); err != nil { return nil, 0, fmt.Errorf("解析扫描决策标识失败: %w", err) }
+		if err := json.Unmarshal([]byte(strategies), &item.StrategyResults); err != nil { return nil, 0, fmt.Errorf("解析扫描策略结果失败: %w", err) }
+		if err := json.Unmarshal([]byte(reasons), &item.ReasonCodes); err != nil { return nil, 0, fmt.Errorf("解析扫描原因失败: %w", err) }
+		if startedAt != "" { item.StartedAt, err = time.Parse(time.RFC3339Nano, startedAt); if err != nil { return nil, 0, err } }
+		if completedAt != "" { item.CompletedAt, err = time.Parse(time.RFC3339Nano, completedAt); if err != nil { return nil, 0, err } }
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil { return nil, 0, err }
+	return items, total, nil
+}
+
+// ListScanRunExclusionsPage 按证券代码稳定排序分页读取资格门排除记录。
+func (s *Store) ListScanRunExclusionsPage(ctx context.Context, scanID string, limit, offset int) ([]scanmodel.Exclusion, int64, error) {
+	if scanID == "" || limit < 1 || limit > 200 || offset < 0 { return nil, 0, fmt.Errorf("扫描排除分页参数无效") }
+	var total int64
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM scan_run_exclusions WHERE scan_id = ?", scanID).Scan(&total); err != nil { return nil, 0, err }
+	rows, err := s.db.QueryContext(ctx, "SELECT scan_id, ts_code, security_name, exchange, trade_date, reason_codes FROM scan_run_exclusions WHERE scan_id = ? ORDER BY ts_code ASC LIMIT ? OFFSET ?", scanID, limit, offset)
+	if err != nil { return nil, 0, err }; defer rows.Close()
+	items := make([]scanmodel.Exclusion, 0, limit)
+	for rows.Next() { var item scanmodel.Exclusion; var exchange, reasons string
+		if err := rows.Scan(&item.ScanID, &item.TsCode, &item.SecurityName, &exchange, &item.TradeDate, &reasons); err != nil { return nil, 0, err }
+		item.Exchange = universe.Exchange(exchange); if err := json.Unmarshal([]byte(reasons), &item.ReasonCodes); err != nil { return nil, 0, fmt.Errorf("解析扫描排除原因失败: %w", err) }; items = append(items, item)
+	}
+	if err := rows.Err(); err != nil { return nil, 0, err }; return items, total, nil
+}
+
+// GetScanRunProgress 从逐股明细计算实时进度，适用于 RUNNING 扫描查询。
+func (s *Store) GetScanRunProgress(ctx context.Context, scanID string) (scanmodel.Run, int, error) {
+	run, err := s.GetScanRun(ctx, scanID); if err != nil { return scanmodel.Run{}, 0, err }
+	var total, pending int
+	err = s.db.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(CASE WHEN status='PENDING' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status='SUCCESS' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status='DATA_INCOMPLETE' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status='ANALYSIS_ERROR' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END),0) FROM scan_run_items WHERE scan_id = ?`, scanID).Scan(&total, &pending, &run.SuccessCount, &run.DataIncompleteCount, &run.AnalysisErrorCount, &run.FailedCount)
+	if err != nil { return scanmodel.Run{}, 0, err }
+	if total+run.ExcludedCount != run.TotalCount { return scanmodel.Run{}, 0, fmt.Errorf("扫描项与排除项数量不匹配") }
+	return run, pending, nil
+}
+
 func (s *Store) ListScanRunItems(ctx context.Context, scanID string) ([]scanmodel.Item, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT scan_id, ts_code, security_name, exchange,
 		list_date, delist_date, status, data_version, decision_ids, strategy_results, reason_codes,

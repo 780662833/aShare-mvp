@@ -26,10 +26,10 @@ type StrategyDecisionQuery struct {
 
 // StrategyDecisionPage 是按决策时间倒序返回的历史决策分页。
 type StrategyDecisionPage struct {
-	Items  []contract.StrategyDecision
-	Total  int64
-	Limit  int
-	Offset int
+	Items  []contract.StrategyDecision `json:"items"`
+	Total  int64                       `json:"total"`
+	Limit  int                         `json:"limit"`
+	Offset int                         `json:"offset"`
 }
 
 // ListStrategyDecisions 按可选条件查询原始历史决策，不重新执行策略。

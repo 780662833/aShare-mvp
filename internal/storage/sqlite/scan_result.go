@@ -26,10 +26,8 @@ func (s *Store) GetScanResult(ctx context.Context, scanID string) (ScanResult, e
 	if strings.TrimSpace(scanID) == "" {
 		return ScanResult{}, fmt.Errorf("scan_id 不能为空")
 	}
-	run, err := s.GetScanRun(ctx, scanID)
-	if err != nil {
-		return ScanResult{}, fmt.Errorf("读取扫描运行失败: %w", err)
-	}
+	run, _, err := s.GetScanRunProgress(ctx, scanID)
+	if err != nil { return ScanResult{}, fmt.Errorf("读取扫描运行失败: %w", err) }
 	items, err := s.ListScanRunItems(ctx, scanID)
 	if err != nil { return ScanResult{}, fmt.Errorf("读取扫描证券明细失败: %w", err) }
 	exclusions, err := s.ListScanRunExclusions(ctx, scanID)
