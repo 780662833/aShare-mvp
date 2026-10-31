@@ -151,8 +151,11 @@ func (s *Scanner) Run(ctx context.Context, asOf time.Time) (Run, error) {
 		result, evalErr := s.evaluator.EvaluateSymbol(ctx, item.TsCode, asOf)
 		item.CompletedAt = s.now().In(marketdata.ShanghaiLocation())
 		if evalErr != nil {
-			item.Status = ItemFailed
-			item.ErrorMessage = evalErr.Error()
+			if result.TsCode == item.TsCode && result.AsOf.Equal(asOf) && len(result.StrategyResults) > 0 {
+				item.DataVersion = result.DataVersion
+				item.Status, item.DecisionIDs, item.StrategyResults, item.ReasonCodes, item.ErrorMessage = classifyResult(result, item.TsCode, asOf)
+				if item.ErrorMessage == "" { item.ErrorMessage = evalErr.Error() } else { item.ErrorMessage += "; " + evalErr.Error() }
+			} else { item.Status = ItemFailed; item.ErrorMessage = evalErr.Error() }
 			run.FailedCount++
 		} else {
 			item.DataVersion = result.DataVersion
@@ -291,6 +294,7 @@ func classifyResult(result appstrategy.Result, tsCode string, asOf time.Time) (I
 		}
 		expected := map[string]bool{chan3buy.StrategyID:false, trendbreakout.StrategyID:false}
 		status, anySaved := ItemFailed, false
+		persistenceFailed := false
 		for _, sr := range result.StrategyResults {
 			if _, ok := expected[sr.StrategyID]; !ok || expected[sr.StrategyID] {
 				return ItemFailed, decisionIDs, strategyResults, reasons, "未知或重复策略身份"
@@ -299,7 +303,7 @@ func classifyResult(result appstrategy.Result, tsCode string, asOf time.Time) (I
 			if !sr.AsOf.Equal(asOf) || sr.DataVersion != result.DataVersion {
 				return ItemFailed, decisionIDs, strategyResults, reasons, "策略结果 as_of 或 data_version 不一致"
 			}
-			if sr.StrategyStatus != "SUCCEEDED" && sr.StrategyStatus != "FAILED" {
+			if sr.StrategyStatus != "SUCCEEDED" && sr.StrategyStatus != "FAILED" && sr.StrategyStatus != "NOT_EVALUATED" {
 				return ItemFailed, decisionIDs, strategyResults, reasons, "未知策略评估状态"
 			}
 			switch sr.PersistenceStatus {
@@ -320,6 +324,7 @@ func classifyResult(result appstrategy.Result, tsCode string, asOf time.Time) (I
 					if status != ItemDataIncomplete && status != ItemAnalysisError { status = ItemSuccess }
 				}
 			case "FAILED", "NOT_ATTEMPTED":
+				if sr.PersistenceStatus == "FAILED" { persistenceFailed = true; reasons = append(reasons, "DECISION_PERSISTENCE_FAILED") }
 				if sr.StrategyStatus == "SUCCEEDED" && sr.PersistenceStatus == "NOT_ATTEMPTED" {
 					return ItemFailed, decisionIDs, strategyResults, reasons, "策略成功但未执行持久化"
 				}
@@ -335,6 +340,7 @@ func classifyResult(result appstrategy.Result, tsCode string, asOf time.Time) (I
 		if !expected[chan3buy.StrategyID] || !expected[trendbreakout.StrategyID] {
 			return ItemFailed, decisionIDs, strategyResults, reasons, "缺少独立策略结果"
 		}
+		if persistenceFailed { return ItemFailed, decisionIDs, strategyResults, uniqueStrings(reasons), "策略决策持久化失败，不能记为分析成功" }
 		if !anySaved { status = ItemAnalysisError }
 		return status, decisionIDs, strategyResults, uniqueStrings(reasons), ""
 	}

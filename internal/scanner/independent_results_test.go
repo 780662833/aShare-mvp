@@ -10,6 +10,19 @@ import (
 	"github.com/780662833/aShare-mvp/internal/strategy/trendbreakout"
 )
 
+func TestClassifyResultMarksSuccessfulAnalysisWithFailedPersistenceAsFailed(t *testing.T) {
+	asOf := marketdata.ShanghaiWallTime(2026, 10, 30, 15, 1)
+	result := appstrategy.Result{TsCode:"600519.SH", AsOf:asOf, DataVersion:"data-v1",
+		Decisions: []contract.StrategyDecision{{DecisionID:"decision-chan", TsCode:"600519.SH", StrategyID:chan3buy.StrategyID, AsOf:asOf, Status:contract.StatusWatching}},
+		StrategyResults: []appstrategy.StrategyResult{
+			{StrategyID:chan3buy.StrategyID, StrategyStatus:"SUCCEEDED", PersistenceStatus:"SAVED", DecisionID:"decision-chan", AsOf:asOf, DataVersion:"data-v1"},
+			{StrategyID:trendbreakout.StrategyID, StrategyStatus:"SUCCEEDED", PersistenceStatus:"FAILED", DecisionID:"decision-trend", AsOf:asOf, DataVersion:"data-v1", ErrorMessage:"disk full"},
+		}}
+	status, ids, strategies, reasons, message := classifyResult(result, "600519.SH", asOf)
+	if status != ItemFailed || len(ids) != 1 || len(strategies) != 2 || message == "" { t.Fatalf("持久化失败不得伪装为成功: status=%s ids=%v strategies=%+v message=%q", status, ids, strategies, message) }
+	found := false; for _, reason := range reasons { if reason == "DECISION_PERSISTENCE_FAILED" { found = true } }; if !found { t.Fatalf("缺少持久化错误原因码: %v", reasons) }
+}
+
 func TestClassifyResultPreservesOneSuccessfulStrategy(t *testing.T) {
 	asOf := marketdata.ShanghaiWallTime(2026, 10, 30, 15, 1)
 	result := appstrategy.Result{
