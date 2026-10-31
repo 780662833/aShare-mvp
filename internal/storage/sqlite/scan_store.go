@@ -153,11 +153,11 @@ func (s *Store) GetScanRun(ctx context.Context, scanID string) (scanmodel.Run, e
 	var run scanmodel.Run
 	var asOf, startedAt, completedAt, status string
 	err := s.db.QueryRowContext(ctx, `SELECT scan_id, as_of, started_at, completed_at, status,
-		total_count, success_count, data_incomplete_count, analysis_error_count, failed_count,
+		total_count, success_count, data_incomplete_count, analysis_error_count, failed_count, excluded_count,
 		error_message FROM scan_runs WHERE scan_id = ?`, scanID).Scan(
 		&run.ID, &asOf, &startedAt, &completedAt, &status,
 		&run.TotalCount, &run.SuccessCount, &run.DataIncompleteCount, &run.AnalysisErrorCount,
-		&run.FailedCount, &run.ErrorMessage)
+		&run.FailedCount, &run.ExcludedCount, &run.ErrorMessage)
 	if err != nil {
 		return scanmodel.Run{}, err
 	}

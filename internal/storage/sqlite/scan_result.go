@@ -16,6 +16,7 @@ import (
 type ScanResult struct {
 	Run       scanmodel.Run
 	Items     []scanmodel.Item
+	Exclusions []scanmodel.Exclusion
 	Decisions []contract.StrategyDecision
 }
 
@@ -30,13 +31,11 @@ func (s *Store) GetScanResult(ctx context.Context, scanID string) (ScanResult, e
 		return ScanResult{}, fmt.Errorf("读取扫描运行失败: %w", err)
 	}
 	items, err := s.ListScanRunItems(ctx, scanID)
-	if err != nil {
-		return ScanResult{}, fmt.Errorf("读取扫描证券明细失败: %w", err)
-	}
-
-	// 先校验扫描明细数量，避免历史数据缺行或多行时返回不完整快照。
-	if len(items) != run.TotalCount {
-		return ScanResult{}, fmt.Errorf("扫描明细数量与总数不一致: items=%d total=%d", len(items), run.TotalCount)
+	if err != nil { return ScanResult{}, fmt.Errorf("读取扫描证券明细失败: %w", err) }
+	exclusions, err := s.ListScanRunExclusions(ctx, scanID)
+	if err != nil { return ScanResult{}, fmt.Errorf("读取扫描排除明细失败: %w", err) }
+	if len(items)+len(exclusions) != run.TotalCount || len(exclusions) != run.ExcludedCount {
+		return ScanResult{}, fmt.Errorf("扫描证券明细数量与总数不一致: items=%d exclusions=%d total=%d", len(items), len(exclusions), run.TotalCount)
 	}
 	var successCount, incompleteCount, analysisErrorCount, failedCount, pendingCount int
 	for _, item := range items {
@@ -65,7 +64,7 @@ func (s *Store) GetScanResult(ctx context.Context, scanID string) (ScanResult, e
 				analysisErrorCount, run.AnalysisErrorCount, failedCount, run.FailedCount)
 		}
 		if run.Status == scanmodel.RunCancelled {
-			if successCount+incompleteCount+analysisErrorCount+failedCount+pendingCount != run.TotalCount {
+			if successCount+incompleteCount+analysisErrorCount+failedCount+pendingCount+len(exclusions) != run.TotalCount {
 				return ScanResult{}, fmt.Errorf("CANCELLED 扫描明细状态总数与扫描总数不一致")
 			}
 		} else if pendingCount != 0 {
@@ -213,5 +212,5 @@ func (s *Store) GetScanResult(ctx context.Context, scanID string) (ScanResult, e
 		}
 		ordered = append(ordered, decision)
 	}
-	return ScanResult{Run: run, Items: items, Decisions: ordered}, nil
+	return ScanResult{Run: run, Items: items, Exclusions: exclusions, Decisions: ordered}, nil
 }
