@@ -149,7 +149,7 @@ func TestEvaluateWaitsWhenM30RetestIsMissing(t *testing.T) {
 	if err != nil { t.Fatal(err) }
 	input := trendInput()
 	bars := input.Bars[marketdata.FrequencyM30]
-	bars[0].Low = 114.0
+	bars[0].Open, bars[0].High, bars[0].Low, bars[0].Close = 114.2, 114.2, 114.0, 114.0
 	input.Bars[marketdata.FrequencyM30] = bars
 	decision, err := strategy.Evaluate(context.Background(), input)
 	if err != nil { t.Fatal(err) }
@@ -163,8 +163,7 @@ func TestEvaluateRequiresM30CloseToReclaimBreakoutAndBreakPriorHigh(t *testing.T
 	if err != nil { t.Fatal(err) }
 	input := trendInput()
 	bars := input.Bars[marketdata.FrequencyM30]
-	bars[1].Close = 113.0
-	bars[1].High = 114.0
+	bars[1].Open, bars[1].High, bars[1].Low, bars[1].Close = 113.5, 114.0, 112.8, 113.0
 	input.Bars[marketdata.FrequencyM30] = bars
 	decision, err := strategy.Evaluate(context.Background(), input)
 	if err != nil { t.Fatal(err) }
@@ -206,6 +205,9 @@ func TestEvaluateRequiresM30RetestAfterM60Hold(t *testing.T) {
 	bars[0].FetchedAt = bars[0].BarTime.Add(30*time.Minute)
 	bars[1].FetchedAt = bars[1].BarTime.Add(30*time.Minute)
 	input.Bars[marketdata.FrequencyM30] = bars
+	m30Tech := input.Technical[marketdata.FrequencyM30]
+	m30Tech.AsOf = bars[len(bars)-1].BarTime
+	input.Technical[marketdata.FrequencyM30] = m30Tech
 	decision, err := strategy.Evaluate(context.Background(), input)
 	if err != nil { t.Fatal(err) }
 	if decision.Status != contract.StatusWaitEntry || !hasReason(decision, "M30_NOT_AFTER_M60_CONFIRMATION") {
@@ -293,7 +295,7 @@ func TestEvaluateDoesNotUseM60BarsBeforeDailyBreakoutConfirmation(t *testing.T) 
 	d1.AsOf = input.Bars[marketdata.FrequencyD1][len(input.Bars[marketdata.FrequencyD1])-1].BarTime
 	input.Technical[marketdata.FrequencyD1] = d1
 	m30Tech := input.Technical[marketdata.FrequencyM30]
-	m30Tech.AsOf = m30[0].BarTime
+	m30Tech.AsOf = m30[len(m30)-1].BarTime
 	input.Technical[marketdata.FrequencyM30] = m30Tech
 
 	decision, err := strategy.Evaluate(context.Background(), input)
