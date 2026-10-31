@@ -500,7 +500,7 @@ func TestEvaluateDoesNotUseLatestM30BarAsRetest(t *testing.T) {
 	input := trendInput()
 	bars := input.Bars[marketdata.FrequencyM30]
 	// 仅最新一根 K 线的 Low 进入回踩区间；更早一根没有触及区间。
-	bars[0].Low = 114.0
+	bars[0].Low = 113.9
 	bars[1].Low = 113.4
 	input.Bars[marketdata.FrequencyM30] = bars
 
@@ -529,6 +529,8 @@ func TestEvaluateEnforcesM30RetestLookbackWindowBoundaries(t *testing.T) {
 		insidePrior := trendBar(marketdata.FrequencyM30,
 			marketdata.ShanghaiWallTime(2026, 11, 2, 12, 30), 114.3, 114.4, 114.0, 260)
 		latest := bars[len(bars)-1]
+		latest.BarTime = marketdata.ShanghaiWallTime(2026, 11, 2, 13, 0)
+		latest.FetchedAt = latest.BarTime.Add(30 * time.Minute)
 		input.Bars[marketdata.FrequencyM30] = []marketdata.Bar{outside, insidePrior, latest}
 		m30Tech := input.Technical[marketdata.FrequencyM30]
 		m30Tech.AsOf = latest.BarTime
@@ -559,6 +561,8 @@ func TestEvaluateEnforcesM30RetestLookbackWindowBoundaries(t *testing.T) {
 		prior := trendBar(marketdata.FrequencyM30,
 			marketdata.ShanghaiWallTime(2026, 11, 2, 12, 30), 114.3, 114.4, 114.0, 260)
 		latest := bars[len(bars)-1]
+		latest.BarTime = marketdata.ShanghaiWallTime(2026, 11, 2, 13, 0)
+		latest.FetchedAt = latest.BarTime.Add(30 * time.Minute)
 		input.Bars[marketdata.FrequencyM30] = []marketdata.Bar{oldest, prior, latest}
 		m30Tech := input.Technical[marketdata.FrequencyM30]
 		m30Tech.AsOf = latest.BarTime
