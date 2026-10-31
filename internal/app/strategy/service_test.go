@@ -150,6 +150,74 @@ func TestExpectedBarTimesPreserveM30AfterM60OrderingIntraday(t *testing.T) {
 	}
 }
 
+func TestEvaluateSymbolRejectsHistoricalBarFetchedAfterAsOfBeforeCZSC(t *testing.T) {
+	repo := validRepository()
+	asOf := marketdata.ShanghaiWallTime(2026, 10, 30, 11, 1)
+	normalFetch := marketdata.ShanghaiWallTime(2026, 10, 30, 10, 59)
+	futureFetch := asOf.Add(time.Minute)
+
+	daily := make([]marketdata.Bar, 0, 64)
+	start := marketdata.ShanghaiWallTime(2026, 8, 27, 15, 0)
+	for i := 0; i < 64; i++ {
+		bar := completeFixtureBar(
+			marketdata.FrequencyD1,
+			start.AddDate(0, 0, i),
+			normalFetch,
+			100+float64(i)*0.15,
+		)
+		if i == 4 {
+			bar.FetchedAt = futureFetch
+		}
+		daily = append(daily, bar)
+	}
+	repo.bars[marketdata.FrequencyD1] = daily
+	repo.bars[marketdata.FrequencyM60] = []marketdata.Bar{
+		completeFixtureBar(
+			marketdata.FrequencyM60,
+			marketdata.ShanghaiWallTime(2026, 10, 30, 10, 30),
+			normalFetch, 110,
+		),
+	}
+	repo.bars[marketdata.FrequencyM30] = []marketdata.Bar{
+		completeFixtureBar(
+			marketdata.FrequencyM30,
+			marketdata.ShanghaiWallTime(2026, 10, 30, 11, 0),
+			normalFetch, 110.2,
+		),
+	}
+
+	analyzer := &fakeAnalyzer{}
+	service, err := New(repo, analyzer, validConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.EvaluateSymbol(context.Background(), "600519.SH", asOf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if analyzer.calls != 0 {
+		t.Fatalf("历史 K 线 fetched_at 晚于 as_of 时，不应调用 CZSC；调用次数=%d", analyzer.calls)
+	}
+	if len(result.Decisions) != 2 || len(repo.saved) != 2 {
+		t.Fatalf("应分别保存两套 DATA_INCOMPLETE 决策：result=%+v saved=%d", result, len(repo.saved))
+	}
+	for _, decision := range result.Decisions {
+		if decision.Status != contract.StatusDataIncomplete {
+			t.Errorf("%s 应为 DATA_INCOMPLETE，得到 %s", decision.StrategyID, decision.Status)
+		}
+		found := false
+		for _, code := range decision.ReasonCodes {
+			if code == "BARS_D1_FETCHED_AFTER_AS_OF" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("%s 缺少 BARS_D1_FETCHED_AFTER_AS_OF 原因码：%v", decision.StrategyID, decision.ReasonCodes)
+		}
+	}
+}
+
 func TestEvaluateSymbolFailsClosedWhenStoredBarsAreMissing(t *testing.T) {
 	repo := validRepository()
 	analyzer := &fakeAnalyzer{}
