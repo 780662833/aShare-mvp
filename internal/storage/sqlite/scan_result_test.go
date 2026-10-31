@@ -21,6 +21,9 @@ func TestGetScanResultJoinsAndValidatesOriginalDecisions(t *testing.T) {
 		decisionID   string
 		itemIDs      []string
 		strategyID   string
+		strategyResults []scanmodel.StrategyResult
+		secondDecisionID string
+		secondStrategyID string
 		wantErr      bool
 	}{
 		{name: "关联完整决策", decisionCode: "600519.SH", decisionID: "decision-ok", strategyID: "chan3buy", itemIDs: []string{"decision-ok"}},
@@ -29,6 +32,11 @@ func TestGetScanResultJoinsAndValidatesOriginalDecisions(t *testing.T) {
 		{name: "跨证券决策", decisionCode: "000001.SZ", decisionID: "decision-cross-symbol", strategyID: "chan3buy", itemIDs: []string{"decision-cross-symbol"}, wantErr: true},
 		{name: "跨时间决策", decisionCode: "600519.SH", decisionAsOf: marketdata.ShanghaiWallTime(2026, 10, 29, 15, 0), decisionID: "decision-cross-time", strategyID: "chan3buy", itemIDs: []string{"decision-cross-time"}, wantErr: true},
 		{name: "跨策略决策", decisionCode: "600519.SH", decisionID: "decision-cross-strategy", strategyID: "trendbreakout", itemIDs: []string{"decision-cross-strategy"}, wantErr: true},
+		{name: "空策略 ID", decisionCode: "600519.SH", decisionID: "decision-empty-strategy", strategyID: "chan3buy", itemIDs: []string{"decision-empty-strategy"}, strategyResults: []scanmodel.StrategyResult{{StrategyID: "", PersistenceStatus: "SAVED", DecisionID: "decision-empty-strategy"}}, wantErr: true},
+		{name: "多个策略重复引用同一决策", decisionCode: "600519.SH", decisionID: "decision-shared", strategyID: "chan3buy", itemIDs: []string{"decision-shared"}, strategyResults: []scanmodel.StrategyResult{{StrategyID: "chan3buy", PersistenceStatus: "SAVED", DecisionID: "decision-shared"}, {StrategyID: "trendbreakout", PersistenceStatus: "SAVED", DecisionID: "decision-shared"}}, wantErr: true},
+		{name: "决策索引缺少对应策略结果", decisionCode: "600519.SH", decisionID: "decision-one", strategyID: "chan3buy", itemIDs: []string{"decision-one", "decision-two"}, wantErr: true},
+		{name: "策略结果引用索引外决策", decisionCode: "600519.SH", decisionID: "decision-outside", strategyID: "chan3buy", itemIDs: []string{"decision-other"}, wantErr: true},
+		{name: "双策略一一对应", decisionCode: "600519.SH", decisionID: "decision-chan", strategyID: "chan3buy", itemIDs: []string{"decision-chan", "decision-trend"}, secondDecisionID: "decision-trend", secondStrategyID: "trendbreakout"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -67,16 +75,31 @@ func TestGetScanResultJoinsAndValidatesOriginalDecisions(t *testing.T) {
 					DataVersion: "data-v1", Profiles: []contract.ProfileReference{},
 				}
 				if err := store.SaveStrategyDecision(ctx, decision); err != nil { t.Fatal(err) }
+				if tt.secondDecisionID != "" {
+					second := decision
+					second.DecisionID = tt.secondDecisionID
+					second.StrategyID = tt.secondStrategyID
+					if err := store.SaveStrategyDecision(ctx, second); err != nil { t.Fatal(err) }
+				}
 			}
 
 			item.Status = scanmodel.ItemSuccess
 			item.DataVersion = "data-v1"
 			item.DecisionIDs = tt.itemIDs
 			item.StartedAt, item.CompletedAt = run.StartedAt, run.StartedAt.Add(time.Second)
-			item.StrategyResults = []scanmodel.StrategyResult{{
-				StrategyID: "chan3buy", StrategyStatus: "SUCCEEDED", PersistenceStatus: "SAVED",
-				DecisionID: tt.decisionID, AsOf: asOf, DataVersion: "data-v1",
-			}}
+			item.StrategyResults = tt.strategyResults
+			if item.StrategyResults == nil {
+				item.StrategyResults = []scanmodel.StrategyResult{{
+					StrategyID: tt.strategyID, StrategyStatus: "SUCCEEDED", PersistenceStatus: "SAVED",
+					DecisionID: tt.decisionID, AsOf: asOf, DataVersion: "data-v1",
+				}}
+			} else {
+				for i := range item.StrategyResults {
+					item.StrategyResults[i].AsOf = asOf
+					item.StrategyResults[i].DataVersion = "data-v1"
+					item.StrategyResults[i].StrategyStatus = "SUCCEEDED"
+				}
+			}
 			if err := store.UpdateScanRunItem(ctx, item); err != nil { t.Fatal(err) }
 
 			got, err := store.GetScanResult(ctx, run.ID)

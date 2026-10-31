@@ -61,9 +61,13 @@ func (s *Store) GetScanResult(ctx context.Context, scanID string) (ScanResult, e
 		}
 
 		savedByStrategy := make(map[string]string)
+		savedByDecisionID := make(map[string]string)
 		for _, sr := range item.StrategyResults {
 			if sr.PersistenceStatus != "SAVED" {
 				continue
+			}
+			if strings.TrimSpace(sr.StrategyID) == "" {
+				return ScanResult{}, fmt.Errorf("证券 %s 的 SAVED 策略结果缺少 StrategyID", item.TsCode)
 			}
 			if strings.TrimSpace(sr.DecisionID) == "" {
 				return ScanResult{}, fmt.Errorf("证券 %s 的 SAVED 策略结果缺少 DecisionID", item.TsCode)
@@ -71,7 +75,11 @@ func (s *Store) GetScanResult(ctx context.Context, scanID string) (ScanResult, e
 			if prior, exists := savedByStrategy[sr.StrategyID]; exists {
 				return ScanResult{}, fmt.Errorf("证券 %s 的策略 %s 存在重复 SAVED 结果: %s / %s", item.TsCode, sr.StrategyID, prior, sr.DecisionID)
 			}
+			if prior, exists := savedByDecisionID[sr.DecisionID]; exists {
+				return ScanResult{}, fmt.Errorf("证券 %s 的 DecisionID %s 被多个 SAVED 策略结果引用: %s / %s", item.TsCode, sr.DecisionID, prior, sr.StrategyID)
+			}
 			savedByStrategy[sr.StrategyID] = sr.DecisionID
+			savedByDecisionID[sr.DecisionID] = sr.StrategyID
 			if sr.AsOf.IsZero() || !sr.AsOf.Equal(run.AsOf) || sr.DataVersion != item.DataVersion {
 				return ScanResult{}, fmt.Errorf("证券 %s 的策略结果快照与扫描不一致: %s", item.TsCode, sr.StrategyID)
 			}
@@ -82,8 +90,15 @@ func (s *Store) GetScanResult(ctx context.Context, scanID string) (ScanResult, e
 			e.strategyID = sr.StrategyID
 			expected[sr.DecisionID] = e
 		}
-		if len(item.StrategyResults) > 0 && len(savedByStrategy) != len(itemIDs) {
-			return ScanResult{}, fmt.Errorf("证券 %s 的 SAVED 策略结果与 DecisionIDs 数量不一致", item.TsCode)
+		if len(item.StrategyResults) > 0 {
+			for id := range itemIDs {
+				if _, exists := savedByDecisionID[id]; !exists {
+					return ScanResult{}, fmt.Errorf("证券 %s 的 DecisionID %s 缺少对应的 SAVED 策略结果", item.TsCode, id)
+				}
+			}
+			if len(savedByDecisionID) != len(itemIDs) {
+				return ScanResult{}, fmt.Errorf("证券 %s 的 SAVED 策略结果与 DecisionIDs 数量不一致", item.TsCode)
+			}
 		}
 	}
 
