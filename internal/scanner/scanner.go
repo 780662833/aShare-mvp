@@ -14,6 +14,7 @@ import (
 	tdxtypes "github.com/bensema/gotdx/types"
 	appstrategy "github.com/780662833/aShare-mvp/internal/app/strategy"
 	scanmodel "github.com/780662833/aShare-mvp/internal/scanner/model"
+	"github.com/780662833/aShare-mvp/internal/market/calendar"
 	"github.com/780662833/aShare-mvp/internal/market/universe"
 	"github.com/780662833/aShare-mvp/internal/marketdata"
 	"github.com/780662833/aShare-mvp/internal/strategy/chan3buy"
@@ -45,10 +46,14 @@ const (
 type Run = scanmodel.Run
 type Item = scanmodel.Item
 type StrategyResult = scanmodel.StrategyResult
+type Exclusion = scanmodel.Exclusion
 
 type Repository interface {
 	ListActiveStockBasics(context.Context) ([]universe.StockBasic, error)
-	CreateScanRun(context.Context, Run, []Item) error
+	GetTradeDay(context.Context, calendar.Exchange, string) (calendar.TradeDay, error)
+	GetLatestOpenTradeDay(context.Context, calendar.Exchange, string) (calendar.TradeDay, error)
+	ListSecurityDailyStates(context.Context, string) ([]universe.SecurityDailyState, error)
+	CreateScanRunWithExclusions(context.Context, Run, []Item, []Exclusion) error
 	UpdateScanRunItem(context.Context, Item) error
 	CompleteScanRun(context.Context, Run) error
 }
@@ -105,32 +110,33 @@ func (s *Scanner) Run(ctx context.Context, asOf time.Time) (Run, error) {
 		}
 	}
 
+	eligible, exclusions, err := s.filterEligibleSecurities(ctx, securities, asOf)
+	if err != nil { return Run{}, fmt.Errorf("扫描股票池资格检查失败: %w", err) }
 	startedAt := s.now().In(marketdata.ShanghaiLocation())
 	id, err := newScanID()
-	if err != nil {
-		return Run{}, fmt.Errorf("生成 scan_id 失败: %w", err)
+	if err != nil { return Run{}, fmt.Errorf("生成 scan_id 失败: %w", err) }
+	run := Run{ID: id, AsOf: asOf, StartedAt: startedAt, Status: RunRunning, TotalCount: len(securities), ExcludedCount: len(exclusions)}
+	items := make([]Item, 0, len(eligible))
+	for _, security := range eligible {
+		items = append(items, Item{ScanID: id, TsCode: security.TsCode, SecurityName: security.Name, Exchange: security.Exchange,
+			ListDate: security.ListDate, DelistDate: security.DelistDate, Status: ItemPending,
+			DecisionIDs: []string{}, ReasonCodes: []string{}})
 	}
-	run := Run{ID: id, AsOf: asOf, StartedAt: startedAt, Status: RunRunning, TotalCount: len(securities)}
-	items := make([]Item, 0, len(securities))
-	for _, security := range securities {
-		items = append(items, Item{
-			ScanID: id, TsCode: security.TsCode, SecurityName: security.Name,
-			Exchange: security.Exchange, ListDate: security.ListDate,
-			DelistDate: security.DelistDate, Status: ItemPending,
-			DecisionIDs: []string{}, ReasonCodes: []string{},
-		})
-	}
-	if err := s.repo.CreateScanRun(ctx, run, items); err != nil {
+	for i := range exclusions { exclusions[i].ScanID = id }
+	if err := s.repo.CreateScanRunWithExclusions(ctx, run, items, exclusions); err != nil {
 		return Run{}, fmt.Errorf("创建扫描运行记录失败: %w", err)
 	}
-
-	if len(items) == 0 {
+	if len(securities) == 0 {
 		run.Status = RunFailed
 		run.ErrorMessage = "当前活动普通 A 股股票池为空"
 		run.CompletedAt = s.now().In(marketdata.ShanghaiLocation())
-		if err := s.repo.CompleteScanRun(context.WithoutCancel(ctx), run); err != nil {
-			return run, fmt.Errorf("完成空股票池扫描记录失败: %w", err)
-		}
+		if err := s.repo.CompleteScanRun(context.WithoutCancel(ctx), run); err != nil { return run, fmt.Errorf("完成空股票池扫描记录失败: %w", err) }
+		return run, nil
+	}
+	if len(items) == 0 {
+		run.Status = RunCompleted
+		run.CompletedAt = s.now().In(marketdata.ShanghaiLocation())
+		if err := s.repo.CompleteScanRun(context.WithoutCancel(ctx), run); err != nil { return run, fmt.Errorf("完成无合格证券扫描记录失败: %w", err) }
 		return run, nil
 	}
 
@@ -178,8 +184,9 @@ func (s *Scanner) Run(ctx context.Context, asOf time.Time) (Run, error) {
 	}
 
 	if run.Status != RunCancelled {
+		eligibleCount := run.TotalCount - run.ExcludedCount
 		switch {
-		case run.SuccessCount == run.TotalCount:
+		case run.SuccessCount == eligibleCount && run.DataIncompleteCount == 0 && run.AnalysisErrorCount == 0 && run.FailedCount == 0:
 			run.Status = RunCompleted
 		case run.SuccessCount > 0:
 			run.Status = RunPartial
@@ -199,6 +206,69 @@ func (s *Scanner) Run(ctx context.Context, asOf time.Time) (Run, error) {
 		return run, ctx.Err()
 	}
 	return run, nil
+}
+
+
+func (s *Scanner) filterEligibleSecurities(ctx context.Context, securities []universe.StockBasic, asOf time.Time) ([]universe.StockBasic, []Exclusion, error) {
+	tradeDate := asOf.Format("2006-01-02")
+	targetByExchange := make(map[calendar.Exchange]string)
+	statesByExchange := make(map[calendar.Exchange]map[string]universe.SecurityDailyState)
+	for _, security := range securities {
+		exchange := calendar.Exchange(security.Exchange)
+		if _, ok := targetByExchange[exchange]; ok { continue }
+		day, err := s.repo.GetTradeDay(ctx, exchange, tradeDate)
+		if err != nil { return nil, nil, fmt.Errorf("读取 %s %s 交易日历失败: %w", exchange, tradeDate, err) }
+		if err := day.Validate(); err != nil { return nil, nil, fmt.Errorf("%s %s 交易日历无效: %w", exchange, tradeDate, err) }
+		if day.FetchedAt.After(asOf) { return nil, nil, fmt.Errorf("%s %s 交易日历采集时间晚于 as_of", exchange, tradeDate) }
+		if !day.IsOpen {
+			day, err = s.repo.GetLatestOpenTradeDay(ctx, exchange, tradeDate)
+			if err != nil { return nil, nil, fmt.Errorf("读取 %s 最近开市日失败: %w", exchange, err) }
+			if err := day.Validate(); err != nil { return nil, nil, fmt.Errorf("%s 最近开市日历无效: %w", exchange, err) }
+			if !day.IsOpen || day.CalDate > tradeDate || day.FetchedAt.After(asOf) { return nil, nil, fmt.Errorf("%s 最近开市日历不满足 as_of 契约", exchange) }
+		}
+		states, err := s.repo.ListSecurityDailyStates(ctx, day.CalDate)
+		if err != nil { return nil, nil, fmt.Errorf("读取 %s %s 证券每日状态失败: %w", exchange, day.CalDate, err) }
+		byCode := make(map[string]universe.SecurityDailyState, len(states))
+		for _, state := range states {
+			if _, exists := byCode[state.TsCode]; exists { return nil, nil, fmt.Errorf("%s %s 存在重复证券状态: %s", exchange, day.CalDate, state.TsCode) }
+			byCode[state.TsCode] = state
+		}
+		targetByExchange[exchange] = day.CalDate
+		statesByExchange[exchange] = byCode
+	}
+	eligible := make([]universe.StockBasic, 0, len(securities))
+	exclusions := make([]Exclusion, 0)
+	for _, security := range securities {
+		exchange := calendar.Exchange(security.Exchange)
+		date := targetByExchange[exchange]
+		state, ok := statesByExchange[exchange][security.TsCode]
+		reasons := make([]string, 0, 3)
+		if !ok { reasons = append(reasons, "SECURITY_DAILY_STATE_MISSING") } else {
+			if err := state.Validate(); err != nil { reasons = append(reasons, "SECURITY_DAILY_STATE_INVALID") }
+			if state.TradeDate != date { reasons = append(reasons, "SECURITY_DAILY_STATE_STALE") }
+			if state.FetchedAt.After(asOf) { reasons = append(reasons, "SECURITY_DAILY_STATE_AFTER_AS_OF") }
+			switch state.STType {
+			case universe.STNone:
+			case universe.ST: reasons = append(reasons, "ST_SECURITY")
+			case universe.STStar: reasons = append(reasons, "ST_STAR_SECURITY")
+			default: reasons = append(reasons, "ST_STATUS_UNKNOWN")
+			}
+			switch state.SuspendType {
+			case universe.SuspendNone:
+			case universe.SuspendFull: reasons = append(reasons, "FULL_SUSPENSION")
+			case universe.SuspendIntraday: reasons = append(reasons, "INTRADAY_SUSPENSION")
+			default: reasons = append(reasons, "SUSPENSION_STATUS_UNKNOWN")
+			}
+		}
+		if security.ListDate != "" && security.ListDate > strings.ReplaceAll(date, "-", "") { reasons = append(reasons, "NOT_LISTED_ON_TRADE_DATE") }
+		if security.DelistDate != "" && security.DelistDate <= strings.ReplaceAll(date, "-", "") { reasons = append(reasons, "DELISTED_ON_TRADE_DATE") }
+		if len(reasons) > 0 {
+			exclusions = append(exclusions, Exclusion{TsCode: security.TsCode, SecurityName: security.Name, Exchange: security.Exchange, TradeDate: date, ReasonCodes: uniqueStrings(reasons)})
+			continue
+		}
+		eligible = append(eligible, security)
+	}
+	return eligible, exclusions, nil
 }
 
 func classifyResult(result appstrategy.Result, tsCode string, asOf time.Time) (ItemStatus, []string, []scanmodel.StrategyResult, []string, string) {
