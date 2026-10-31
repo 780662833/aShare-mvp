@@ -185,6 +185,16 @@ func TestGetScanResultValidatesSummaryConsistency(t *testing.T) {
 			for i, status := range tt.itemStatuses {
 				item := items[i]
 				if status == scanmodel.ItemPending { continue }
+				if status == scanmodel.ItemStatus("CORRUPTED") {
+					// 仅在这个测试连接上临时忽略 CHECK，模拟历史损坏数据；
+					// 写入端约束仍保持不变，读取端必须拒绝未知状态。
+					store.DB().SetMaxOpenConns(1)
+					if _, err := store.DB().ExecContext(ctx, "PRAGMA ignore_check_constraints = ON"); err != nil { t.Fatal(err) }
+					if _, err := store.DB().ExecContext(ctx,
+						"UPDATE scan_run_items SET status = ? WHERE scan_id = ? AND ts_code = ?",
+						string(status), run.ID, item.TsCode); err != nil { t.Fatal(err) }
+					continue
+				}
 				item.Status = status
 				item.StartedAt = started
 				item.CompletedAt = started.Add(time.Second)
