@@ -220,7 +220,7 @@ func classifyResult(result appstrategy.Result, tsCode string, asOf time.Time) (I
 			decisionByID[d.DecisionID] = d
 		}
 		expected := map[string]bool{chan3buy.StrategyID:false, trendbreakout.StrategyID:false}
-		status, anySaved := ItemAnalysisError, false
+		status, anySaved := ItemFailed, false
 		for _, sr := range result.StrategyResults {
 			if _, ok := expected[sr.StrategyID]; !ok || expected[sr.StrategyID] {
 				return ItemFailed, decisionIDs, strategyResults, reasons, "未知或重复策略身份"
