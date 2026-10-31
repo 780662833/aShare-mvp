@@ -17,7 +17,7 @@ import (
 
 const (
 	StrategyID      = "chan3buy"
-	StrategyVersion = "1.0.0"
+	StrategyVersion = "1.1.0"
 
 	m60Profile        = czscclient.SignalProfileChan3BuyM60
 	m60ProfileVersion = "chan3buy-m60-v1"
@@ -173,7 +173,11 @@ func (s *Strategy) Evaluate(ctx context.Context, input contract.StrategyInput) (
 		return decision, nil
 	}
 
-	confirmedAt := m60.AsOf
+	lifecycle, lifecycleKnown := contract.ResolveSignalLifecycle(m60, mainSignalKey)
+	if !lifecycleKnown {
+		return wait(decision, "THIRD_BUY_SIGNAL_AGE_UNKNOWN", "CZSC 未提供主三买信号的连续年龄和起始时间"), nil
+	}
+	confirmedAt := lifecycle.StartedAt
 	decision.ConfirmedAt = &confirmedAt
 	decision.Status = contract.StatusConfirmed
 	contract.AppendReason(&decision, "THIRD_BUY_MAIN_SIGNAL_CONFIRMED")
@@ -186,20 +190,16 @@ func (s *Strategy) Evaluate(ctx context.Context, input contract.StrategyInput) (
 		Source: mainSignalKey,
 		Confidence: contract.GradeHigh,
 	})
-
-	if m60.SignalAgeBars == nil {
-		return wait(decision, "THIRD_BUY_SIGNAL_AGE_UNKNOWN", "缺少主三买信号持续 K 线年龄，无法确认信号仍处于有效观察窗口"), nil
-	}
-	if *m60.SignalAgeBars > s.config.MaxSignalAgeBars {
+	if lifecycle.AgeBars > s.config.MaxSignalAgeBars {
 		decision.Status = contract.StatusExpired
 		contract.AppendReason(&decision, "THIRD_BUY_SETUP_EXPIRED")
 		decision.RiskWarnings = append(decision.RiskWarnings, contract.Evidence{
 			Code: "THIRD_BUY_SETUP_EXPIRED",
 			Description: "主三买信号超过配置允许的已完成 60 分钟 K 线数量",
-			Value: strconv.Itoa(*m60.SignalAgeBars),
+			Value: strconv.Itoa(lifecycle.AgeBars),
 			Frequency: string(marketdata.FrequencyM60),
 			ObservedAt: m60.AsOf,
-			Source: "upstream signal lifecycle",
+			Source: "CZSC signal_lifecycles",
 			Confidence: contract.GradeHigh,
 		})
 		return decision, nil

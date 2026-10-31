@@ -281,3 +281,30 @@ func hasReason(decision contract.StrategyDecision, code string) bool {
 	}
 	return false
 }
+
+
+func TestEvaluateUsesSignalSpecificLifecycleStartTime(t *testing.T) {
+	strategy, err := New(chanConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := chanInput()
+	m60 := input.Technical[marketdata.FrequencyM60]
+	m60.SignalAgeBars = nil
+	startedAt := marketdata.ShanghaiWallTime(2026, 10, 30, 12, 0)
+	m60.SignalLifecycles = map[string]contract.SignalLifecycle{
+		mainSignalKey: {AgeBars: 2, StartedAt: startedAt},
+	}
+	input.Technical[marketdata.FrequencyM60] = m60
+
+	decision, err := strategy.Evaluate(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Status != contract.StatusBuyObservation {
+		t.Fatalf("有信号级生命周期的合法输入应正常评估，得到 %s: %v", decision.Status, decision.ReasonCodes)
+	}
+	if decision.ConfirmedAt == nil || !decision.ConfirmedAt.Equal(startedAt) {
+		t.Fatalf("ConfirmedAt 必须保留三买信号首次连续出现时间，不得每次评估重置: %+v", decision.ConfirmedAt)
+	}
+}

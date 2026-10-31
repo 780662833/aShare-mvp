@@ -363,3 +363,30 @@ func hasReason(decision contract.StrategyDecision, code string) bool {
 }
 
 func timePtr(value time.Time) *time.Time { return &value }
+
+
+func TestEvaluateUsesSelectedBreakoutSignalLifecycleStartTime(t *testing.T) {
+	strategy, err := New(trendConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := trendInput()
+	d1 := input.Technical[marketdata.FrequencyD1]
+	d1.SignalAgeBars = nil
+	startedAt := marketdata.ShanghaiWallTime(2026, 10, 28, 15, 0)
+	d1.SignalLifecycles = map[string]contract.SignalLifecycle{
+		"日线_D1W21_事件V240428": {AgeBars: 2, StartedAt: startedAt},
+	}
+	input.Technical[marketdata.FrequencyD1] = d1
+
+	decision, err := strategy.Evaluate(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Status != contract.StatusBuyObservation {
+		t.Fatalf("有信号级生命周期的合法输入应正常评估，得到 %s: %v", decision.Status, decision.ReasonCodes)
+	}
+	if decision.ConfirmedAt == nil || !decision.ConfirmedAt.Equal(startedAt) {
+		t.Fatalf("ConfirmedAt 必须保留所选突破信号的首次连续出现时间: %+v", decision.ConfirmedAt)
+	}
+}

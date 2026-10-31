@@ -70,6 +70,9 @@ class NativeSignalIntegrationTests(unittest.TestCase):
         self.assertIn("日线_D1SMA#60_分类V221101", signals)
         self.assertIn("日线_D1VOL#SMA#20_分类V230214", signals)
         self.assertTrue(all(isinstance(value, str) for value in signals.values()))
+        self.assertIn("日线_D1W21_事件V240428", result["signal_lifecycles"])
+        self.assertGreaterEqual(result["signal_lifecycles"]["日线_D1W21_事件V240428"]["age_bars"], 0)
+        self.assertTrue(result["signal_lifecycles"]["日线_D1W21_事件V240428"]["started_at"].endswith("+08:00"))
 
     def test_chan3buy_profile_executes_primary_and_support_signals(self):
         result = analyze_payload(make_payload("60分钟", "chan3buy_m60_v1", 360))
@@ -78,6 +81,7 @@ class NativeSignalIntegrationTests(unittest.TestCase):
         self.assertIn("60分钟_D1_三买辅助V230228", result["signals"])
         self.assertTrue(any("V230318" in key for key in result["signals"]))
         self.assertTrue(any("V230319" in key for key in result["signals"]))
+        self.assertIn("60分钟_D1_三买辅助V230228", result["signal_lifecycles"])
         self.assertIn(result["signal_data_status"], {"READY", "INSUFFICIENT_DATA"})
 
     def test_m30_timing_profile_executes_native_bi_status_signal(self):
@@ -85,6 +89,7 @@ class NativeSignalIntegrationTests(unittest.TestCase):
 
         self.assertEqual(result["signal_profile_version"], "chan3buy-m30-timing-v1")
         self.assertIn("30分钟_D1_表里关系V230102", result["signals"])
+        self.assertIn("30分钟_D1_表里关系V230102", result["signal_lifecycles"])
         self.assertIn(result["signal_data_status"], {"READY", "INSUFFICIENT_DATA"})
 
 

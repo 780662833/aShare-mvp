@@ -121,18 +121,23 @@ def _czsc_wall_time(value: datetime) -> datetime:
 
 
 def _market_iso(value: Any) -> str:
-    """CZSC 返回 naive datetime；重新附加 +08:00 标签，不做时间数值换算。"""
+    """将 CZSC 输出转换为显式 +08:00 时间，不改变市场墙上时间数值。"""
     if hasattr(value, "to_pydatetime"):
         value = value.to_pydatetime()
+    if isinstance(value, str):
+        # 部分 CZSC/表格路径会将 dt 先转成字符串；兼容 ISO 日期时间，
+        # 对无时区字符串按 CZSC 的市场墙上时间语义补 +08:00。
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError(f"CZSC 输出时间格式无效: {value!r}") from exc
     if isinstance(value, datetime):
         if value.tzinfo is None:
             value = value.replace(tzinfo=SHANGHAI_TZ)
         elif value.utcoffset() != timedelta(hours=8):
             raise ValueError("CZSC 输出时间必须保留 Asia/Shanghai +08:00 语义")
         return value.isoformat()
-    if hasattr(value, "isoformat"):
-        return value.isoformat()
-    return str(value)
+    raise ValueError(f"CZSC 输出时间类型无效: {type(value).__name__}")
 
 
 def _resolve_signal_profile(profile: Any, freq: str) -> tuple[str, dict[str, Any]]:
@@ -179,6 +184,32 @@ def _latest_signal_values(rows: Any, freq: str) -> dict[str, str]:
             and isinstance(value, str)
         ):
             result[key] = value
+    return result
+
+
+def _signal_lifecycles(rows: Any, freq: str) -> dict[str, dict[str, Any]]:
+    """为最新信号计算连续状态年龄及起始 K 线时间。
+
+    年龄按连续相同信号值的已完成 K 线计数；最新 K 线为 0。
+    仅使用本次 CZSC 实际生成的历史行，不从自然时间差猜测交易 bar 数。
+    """
+    latest_signals = _latest_signal_values(rows, freq)
+    result: dict[str, dict[str, Any]] = {}
+    for key, value in latest_signals.items():
+        age_bars = 0
+        start_row = rows[-1]
+        for row in reversed(rows[:-1]):
+            if not isinstance(row, dict) or row.get(key) != value:
+                break
+            age_bars += 1
+            start_row = row
+        started_at = start_row.get("dt")
+        if started_at is None:
+            raise RuntimeError(f"CZSC 信号历史缺少 dt，无法确定 {key!r} 的起始时间")
+        result[key] = {
+            "age_bars": age_bars,
+            "started_at": _market_iso(started_at),
+        }
     return result
 
 
@@ -281,6 +312,7 @@ def analyze_payload(payload: Any) -> dict[str, Any]:
     analyzer = CZSC(raw_bars)
 
     signals: dict[str, str] = {}
+    signal_lifecycles: dict[str, dict[str, Any]] = {}
     if request["signals_config"]:
         rows = generate_czsc_signals(
             raw_bars,
@@ -290,6 +322,7 @@ def analyze_payload(payload: Any) -> dict[str, Any]:
             df=False,
         )
         signals = _latest_signal_values(rows, request["freq"])
+        signal_lifecycles = _signal_lifecycles(rows, request["freq"])
 
     signal_data_status = _signal_data_status(
         request["signal_profile"], analyzer, len(raw_bars)
@@ -339,6 +372,7 @@ def analyze_payload(payload: Any) -> dict[str, Any]:
         "czsc_source_revision": CZSC_SOURCE_REVISION,
         "signal_data_status": signal_data_status,
         "signals": signals,
+        "signal_lifecycles": signal_lifecycles,
         "as_of": request["bars"][-1]["dt"].isoformat(),
         "input_bar_count": len(raw_bars),
         "fx_count": len(analyzer.fx_list),

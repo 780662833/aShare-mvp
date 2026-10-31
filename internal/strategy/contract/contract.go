@@ -87,19 +87,26 @@ type BISummary struct {
 
 // FrequencyAnalysis 是单一周期的 CZSC 快照。
 // Signals 保留 CZSC 原始 key/value；策略层只解析自己白名单中的 key。
+type SignalLifecycle struct {
+	// AgeBars 为末根已完成 K 线相对该信号连续状态起点的距离，起点当根为 0。
+	AgeBars int       `json:"age_bars"`
+	StartedAt time.Time `json:"started_at"`
+}
+
 type FrequencyAnalysis struct {
-	AsOf                 time.Time          `json:"as_of"`
-	InputBarCount        int                `json:"input_bar_count"`
-	SignalProfile        string             `json:"signal_profile"`
-	SignalProfileVersion string             `json:"signal_profile_version"`
-	CZSCSourceRevision   string             `json:"czsc_source_revision"`
-	SignalDataStatus     string             `json:"signal_data_status"`
-	Signals              map[string]string  `json:"signals"`
-	BICount              int                `json:"bi_count"`
-	RecentBI             []BISummary        `json:"recent_bi"`
-	// SignalAgeBars is supplied by an upstream lifecycle tracker.
-	// nil means age is unknown; strategies must not invent an age.
-	SignalAgeBars        *int               `json:"signal_age_bars,omitempty"`
+	AsOf                 time.Time                    `json:"as_of"`
+	InputBarCount        int                          `json:"input_bar_count"`
+	SignalProfile        string                       `json:"signal_profile"`
+	SignalProfileVersion string                       `json:"signal_profile_version"`
+	CZSCSourceRevision   string                       `json:"czsc_source_revision"`
+	SignalDataStatus     string                       `json:"signal_data_status"`
+	Signals              map[string]string            `json:"signals"`
+	SignalLifecycles     map[string]SignalLifecycle   `json:"signal_lifecycles,omitempty"`
+	BICount              int                          `json:"bi_count"`
+	RecentBI             []BISummary                  `json:"recent_bi"`
+	// SignalAgeBars 仅保留给直接调用策略的旧测试/迁移输入。
+	// 应用层正式链路使用按信号 key 区分的 SignalLifecycles。
+	SignalAgeBars        *int                         `json:"signal_age_bars,omitempty"`
 }
 
 type MarketContext struct {
@@ -120,6 +127,7 @@ type StrategyInput struct {
 	// PreviousDecision is optional lifecycle context. It is read-only and must
 	// belong to the same symbol, strategy, implementation version and config.
 	PreviousDecision *StrategyDecision                   `json:"previous_decision,omitempty"`
+	DataIssues       []string                            `json:"data_issues,omitempty"`
 }
 
 type StrategyDecision struct {
@@ -194,7 +202,8 @@ func DeterministicDecisionID(tsCode, strategyID, strategyVersion, configVersion 
 // ValidateInput returns stable reason codes for input failures. It never
 // sorts, repairs, fills or otherwise mutates input market data.
 func ValidateInput(input StrategyInput, required []marketdata.Frequency) []string {
-	issues := make([]string, 0)
+	issues := make([]string, 0, len(input.DataIssues))
+	issues = append(issues, input.DataIssues...)
 	if input.AsOf.IsZero() {
 		issues = append(issues, "AS_OF_MISSING")
 	}
@@ -259,6 +268,10 @@ func ValidateInput(input StrategyInput, required []marketdata.Frequency) []strin
 				issues = append(issues, fmt.Sprintf("BARS_%s_AFTER_AS_OF", frequency))
 				break
 			}
+			if !input.AsOf.IsZero() && bar.FetchedAt.After(input.AsOf) {
+				issues = append(issues, fmt.Sprintf("BARS_%s_FETCHED_AFTER_AS_OF", frequency))
+				break
+			}
 		}
 		if bars[0].AdjustMode == marketdata.AdjustUnknown {
 			issues = append(issues, fmt.Sprintf("BARS_%s_ADJUSTMENT_UNKNOWN", frequency))
@@ -319,6 +332,18 @@ func ValidateTechnicalSnapshot(
 		issues = append(issues, fmt.Sprintf("TECHNICAL_%s_SIGNALS_MISSING", frequency))
 	}
 	return uniqueStrings(issues)
+}
+
+// ResolveSignalLifecycle 优先读取按信号 key 计算的生命周期；旧 scalar 仅为测试迁移兼容。
+func ResolveSignalLifecycle(snapshot FrequencyAnalysis, signalKey string) (SignalLifecycle, bool) {
+	if lifecycle, ok := snapshot.SignalLifecycles[signalKey]; ok &&
+		lifecycle.AgeBars >= 0 && !lifecycle.StartedAt.IsZero() {
+		return lifecycle, true
+	}
+	if snapshot.SignalAgeBars != nil && *snapshot.SignalAgeBars >= 0 {
+		return SignalLifecycle{AgeBars: *snapshot.SignalAgeBars, StartedAt: snapshot.AsOf}, true
+	}
+	return SignalLifecycle{}, false
 }
 
 func AppendReason(decision *StrategyDecision, code string) {

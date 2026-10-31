@@ -17,7 +17,7 @@ import (
 
 const (
 	StrategyID      = "trend_breakout"
-	StrategyVersion = "1.0.0"
+	StrategyVersion = "1.1.0"
 
 	d1Profile        = czscclient.SignalProfileTrendD1
 	d1ProfileVersion = "trend-breakout-d1-v1"
@@ -191,7 +191,11 @@ func (s *Strategy) Evaluate(ctx context.Context, input contract.StrategyInput) (
 		return decision, nil
 	}
 
-	confirmedAt := latestDaily.BarTime
+	lifecycle, lifecycleKnown := contract.ResolveSignalLifecycle(d1, breakoutSignalKey)
+	if !lifecycleKnown {
+		return wait(decision, "BREAKOUT_SIGNAL_AGE_UNKNOWN", "CZSC 未提供日线突破信号的连续年龄和起始时间"), nil
+	}
+	confirmedAt := lifecycle.StartedAt
 	decision.ConfirmedAt = &confirmedAt
 	decision.Status = contract.StatusConfirmed
 	contract.AppendReason(&decision, "DAILY_CLOSE_BREAKOUT_CONFIRMED")
@@ -212,20 +216,16 @@ func (s *Strategy) Evaluate(ctx context.Context, input contract.StrategyInput) (
 		Source: breakoutSignalKey,
 		Confidence: contract.GradeHigh,
 	})
-
-	if d1.SignalAgeBars == nil {
-		return wait(decision, "BREAKOUT_SIGNAL_AGE_UNKNOWN", "缺少日线突破信号持续交易日年龄，无法确认信号仍处于有效观察窗口"), nil
-	}
-	if *d1.SignalAgeBars > s.config.MaxSignalAgeDays {
+	if lifecycle.AgeBars > s.config.MaxSignalAgeDays {
 		decision.Status = contract.StatusExpired
 		contract.AppendReason(&decision, "BREAKOUT_SETUP_EXPIRED")
 		decision.RiskWarnings = append(decision.RiskWarnings, contract.Evidence{
 			Code: "BREAKOUT_SETUP_EXPIRED",
 			Description: "突破信号超过配置允许的已完成日线数量",
-			Value: strconv.Itoa(*d1.SignalAgeBars),
+			Value: strconv.Itoa(lifecycle.AgeBars),
 			Frequency: string(marketdata.FrequencyD1),
 			ObservedAt: latestDaily.BarTime,
-			Source: "upstream signal lifecycle",
+			Source: "CZSC signal_lifecycles",
 			Confidence: contract.GradeHigh,
 		})
 		return decision, nil
