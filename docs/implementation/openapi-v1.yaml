@@ -1,0 +1,383 @@
+openapi: 3.1.0
+info:
+  title: aShare-mvp Product API
+  version: 1.0.0
+  description: |
+    本机 A 股研究辅助 API。仅允许 localhost/loopback 监听。
+    所有 as_of/from/to 均须为带时区 RFC3339。策略结果仅供研究，不是交易指令。
+servers:
+  - url: http://127.0.0.1:8080
+    description: 本机默认监听地址
+paths:
+  /healthz:
+    get:
+      operationId: getHealth
+      summary: SQLite 健康检查
+      responses:
+        '200':
+          description: 服务与 SQLite 可用
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, const: ok }
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /api/v1/evaluations:
+    post:
+      operationId: createEvaluation
+      summary: 单股双策略评估
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvaluationRequest'
+      responses:
+        '200':
+          description: 评估结果（字段复用应用服务 Result 模型）
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '499':
+          description: 请求已取消（非标准 HTTP 状态码）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '504':
+          description: Provider deadline 超时
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/scans:
+    post:
+      operationId: createScan
+      summary: 启动异步扫描
+      description: |
+        单进程最多允许一个扫描任务。缺少可信交易日历/逐日证券状态时 fail closed。
+        股票池使用当前 ACTIVE 普通 A 股快照，不支持历史日期完整股票池重建。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScanRequest'
+      responses:
+        '202':
+          description: 扫描已启动
+          headers:
+            Location:
+              schema: { type: string }
+              description: 查询扫描状态的相对路径
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScanAccepted'
+        '200':
+          description: 扫描在创建响应前已结束
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScanRun'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: 已有扫描任务运行
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/scans/{scan_id}:
+    parameters:
+      - $ref: '#/components/parameters/ScanID'
+    get:
+      operationId: getScan
+      summary: 获取扫描状态与进度
+      responses:
+        '200':
+          description: 扫描状态
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [run, processed_count, pending_count]
+                properties:
+                  run: { $ref: '#/components/schemas/ScanRun' }
+                  processed_count: { type: integer, minimum: 0 }
+                  pending_count: { type: integer, minimum: 0 }
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/scans/{scan_id}/items:
+    parameters:
+      - $ref: '#/components/parameters/ScanID'
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Offset'
+    get:
+      operationId: listScanItems
+      summary: 分页读取逐股扫描结果
+      responses:
+        '200':
+          description: 逐股结果页
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScanItemPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/scans/{scan_id}/exclusions:
+    parameters:
+      - $ref: '#/components/parameters/ScanID'
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Offset'
+    get:
+      operationId: listScanExclusions
+      summary: 分页读取扫描资格排除项
+      responses:
+        '200':
+          description: 排除项页
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScanExclusionPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/decisions:
+    get:
+      operationId: listDecisions
+      summary: 筛选并分页查询历史决策
+      parameters:
+        - name: ts_code
+          in: query
+          schema: { type: string }
+        - name: strategy_id
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema: { type: string }
+        - name: from
+          in: query
+          description: 带时区 RFC3339 起始时点
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          description: 带时区 RFC3339 结束时点
+          schema: { type: string, format: date-time }
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: 历史决策页（复用 S5 仓储响应模型）
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/decisions/{decision_id}:
+    parameters:
+      - name: decision_id
+        in: path
+        required: true
+        schema: { type: string, minLength: 1 }
+    get:
+      operationId: getDecision
+      summary: 读取完整历史决策
+      responses:
+        '200':
+          description: 决策详情
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+components:
+  parameters:
+    ScanID:
+      name: scan_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+    Offset:
+      name: offset
+      in: query
+      schema: { type: integer, minimum: 0, default: 0 }
+  schemas:
+    EvaluationRequest:
+      type: object
+      additionalProperties: false
+      required: [ts_code, as_of]
+      properties:
+        ts_code: { type: string, minLength: 1, examples: [600519.SH] }
+        as_of: { type: string, format: date-time, description: 必须包含时区偏移 }
+    ScanRequest:
+      type: object
+      additionalProperties: false
+      required: [as_of]
+      properties:
+        as_of: { type: string, format: date-time, description: 必须包含时区偏移 }
+    ScanAccepted:
+      type: object
+      required: [scan_id, status, as_of]
+      properties:
+        scan_id: { type: string }
+        status: { type: string, const: RUNNING }
+        as_of: { type: string, format: date-time }
+    ScanRun:
+      type: object
+      required: [scan_id, as_of, started_at, status, total_count, success_count, data_incomplete_count, analysis_error_count, failed_count, excluded_count]
+      properties:
+        scan_id: { type: string }
+        as_of: { type: string, format: date-time }
+        started_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time }
+        status:
+          type: string
+          enum: [RUNNING, COMPLETED, PARTIAL_SUCCESS, FAILED, CANCELLED]
+        total_count: { type: integer, minimum: 0 }
+        success_count: { type: integer, minimum: 0 }
+        data_incomplete_count: { type: integer, minimum: 0 }
+        analysis_error_count: { type: integer, minimum: 0 }
+        failed_count: { type: integer, minimum: 0 }
+        excluded_count: { type: integer, minimum: 0 }
+        error_message: { type: string }
+    StrategyResult:
+      type: object
+      required: [strategy_id, strategy_status, persistence_status, as_of, data_version]
+      properties:
+        strategy_id: { type: string }
+        strategy_status: { type: string }
+        persistence_status: { type: string }
+        decision_id: { type: string }
+        as_of: { type: string, format: date-time }
+        data_version: { type: string }
+        error_message: { type: string }
+    ScanItem:
+      type: object
+      required: [scan_id, ts_code, exchange, status, decision_ids, strategy_results, reason_codes]
+      properties:
+        scan_id: { type: string }
+        ts_code: { type: string }
+        security_name: { type: string }
+        exchange: { type: string }
+        list_date: { type: string }
+        delist_date: { type: string }
+        status: { type: string, enum: [PENDING, SUCCESS, DATA_INCOMPLETE, ANALYSIS_ERROR, FAILED] }
+        data_version: { type: string }
+        decision_ids:
+          type: array
+          items: { type: string }
+        strategy_results:
+          type: array
+          items: { $ref: '#/components/schemas/StrategyResult' }
+        reason_codes:
+          type: array
+          items: { type: string }
+        error_message: { type: string }
+        started_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time }
+    ScanExclusion:
+      type: object
+      required: [scan_id, ts_code, exchange, trade_date, reason_codes]
+      properties:
+        scan_id: { type: string }
+        ts_code: { type: string }
+        security_name: { type: string }
+        exchange: { type: string }
+        trade_date: { type: string, format: date }
+        reason_codes:
+          type: array
+          items: { type: string }
+    ScanItemPage:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ScanItem' }
+        total: { type: integer, minimum: 0 }
+        limit: { type: integer }
+        offset: { type: integer }
+    ScanExclusionPage:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ScanExclusion' }
+        total: { type: integer, minimum: 0 }
+        limit: { type: integer }
+        offset: { type: integer }
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+  responses:
+    BadRequest:
+      description: 请求参数、JSON 或分页参数无效
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    NotFound:
+      description: 记录不存在
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    Unprocessable:
+      description: 证券资格不满足或扫描预检失败
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    InternalError:
+      description: 内部评估或存储错误
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    ServiceUnavailable:
+      description: SQLite 不可用
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }

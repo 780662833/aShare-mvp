@@ -181,5 +181,5 @@ Invoke-RestMethod "http://127.0.0.1:8080/api/v1/decisions/decision-..."
 - 单进程内最多一个后台扫描任务；不支持多实例协调。
 - 服务进程异常退出后，下一次启动会把遗留 RUNNING 任务标记为 CANCELLED，不会自动续跑。
 - 本机 API 没有身份认证和授权；只能绑定 loopback。
-- 本版本没有提供 OpenAPI 机器可读 schema；本文件是接口契约说明。
+- 机器可读契约见 [OpenAPI 3.1](openapi-v1.yaml)；本文件补充运行边界和示例。
 - CI 自动化测试不等于 Windows 本机端到端验收。首次运行仍需使用实际 gotdx 网络、经核验 reference 数据和 CZSC 服务完成联调。
