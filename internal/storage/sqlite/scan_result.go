@@ -14,10 +14,10 @@ import (
 // ScanResult 将扫描快照、逐股结果与原始完整策略决策组合为只读结果。
 // Decisions 保留数据库中保存的完整 payload，不重新运行策略。
 type ScanResult struct {
-	Run       scanmodel.Run
-	Items     []scanmodel.Item
-	Exclusions []scanmodel.Exclusion
-	Decisions []contract.StrategyDecision
+	Run       scanmodel.Run          `json:"run"`
+	Items     []scanmodel.Item        `json:"items"`
+	Exclusions []scanmodel.Exclusion `json:"exclusions"`
+	Decisions []contract.StrategyDecision `json:"decisions"`
 }
 
 // GetScanResult 按原始 DecisionID 批量读取并校验完整决策。
