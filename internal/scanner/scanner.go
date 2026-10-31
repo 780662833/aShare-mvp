@@ -156,7 +156,7 @@ func (s *Scanner) Run(ctx context.Context, asOf time.Time) (Run, error) {
 				item.Status, item.DecisionIDs, item.StrategyResults, item.ReasonCodes, item.ErrorMessage = classifyResult(result, item.TsCode, asOf)
 				if item.ErrorMessage == "" { item.ErrorMessage = evalErr.Error() } else { item.ErrorMessage += "; " + evalErr.Error() }
 			} else { item.Status = ItemFailed; item.ErrorMessage = evalErr.Error() }
-			run.FailedCount++
+			switch item.Status { case ItemSuccess: run.SuccessCount++; case ItemDataIncomplete: run.DataIncompleteCount++; case ItemAnalysisError: run.AnalysisErrorCount++; default: run.FailedCount++ }
 		} else {
 			item.DataVersion = result.DataVersion
 			item.Status, item.DecisionIDs, item.StrategyResults, item.ReasonCodes, item.ErrorMessage = classifyResult(result, item.TsCode, asOf)
@@ -295,6 +295,7 @@ func classifyResult(result appstrategy.Result, tsCode string, asOf time.Time) (I
 		expected := map[string]bool{chan3buy.StrategyID:false, trendbreakout.StrategyID:false}
 		status, anySaved := ItemFailed, false
 		persistenceFailed := false
+		notEvaluated := false
 		for _, sr := range result.StrategyResults {
 			if _, ok := expected[sr.StrategyID]; !ok || expected[sr.StrategyID] {
 				return ItemFailed, decisionIDs, strategyResults, reasons, "未知或重复策略身份"
@@ -325,6 +326,7 @@ func classifyResult(result appstrategy.Result, tsCode string, asOf time.Time) (I
 				}
 			case "FAILED", "NOT_ATTEMPTED":
 				if sr.PersistenceStatus == "FAILED" { persistenceFailed = true; reasons = append(reasons, "DECISION_PERSISTENCE_FAILED") }
+				if sr.StrategyStatus == "NOT_EVALUATED" { notEvaluated = true; reasons = append(reasons, "STRATEGY_NOT_EVALUATED") }
 				if sr.StrategyStatus == "SUCCEEDED" && sr.PersistenceStatus == "NOT_ATTEMPTED" {
 					return ItemFailed, decisionIDs, strategyResults, reasons, "策略成功但未执行持久化"
 				}
@@ -341,6 +343,7 @@ func classifyResult(result appstrategy.Result, tsCode string, asOf time.Time) (I
 			return ItemFailed, decisionIDs, strategyResults, reasons, "缺少独立策略结果"
 		}
 		if persistenceFailed { return ItemFailed, decisionIDs, strategyResults, uniqueStrings(reasons), "策略决策持久化失败，不能记为分析成功" }
+		if notEvaluated { return ItemFailed, decisionIDs, strategyResults, uniqueStrings(reasons), "扫描中断导致双策略评估未全部完成" }
 		if !anySaved { status = ItemAnalysisError }
 		return status, decisionIDs, strategyResults, uniqueStrings(reasons), ""
 	}
